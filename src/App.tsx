@@ -4,13 +4,15 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { Effect } from "effect"
 import * as Atom from "effect/unstable/reactivity/Atom"
 import { useEffect, useRef } from "react"
-import { config } from "./config.js"
-import type { TraceItem, TraceSpanItem } from "./domain.js"
-import { runtime } from "./runtime.js"
+import { config, resolveOtelUrl } from "./config.js"
+import type { LogItem, TraceItem, TraceSpanItem } from "./domain.js"
+import { effectSetupInstructions } from "./instructions.js"
+import { queryRuntime } from "./runtime.js"
+import { LogQueryService } from "./services/LogQueryService.js"
 import { TraceQueryService } from "./services/TraceQueryService.js"
 
 type LoadStatus = "loading" | "ready" | "error"
-type DetailView = "waterfall" | "span-detail"
+type DetailView = "waterfall" | "span-detail" | "service-logs"
 
 interface TraceState {
 	readonly status: LoadStatus
@@ -20,8 +22,26 @@ interface TraceState {
 	readonly fetchedAt: Date | null
 }
 
-const loadTraceServices = () => runtime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listServices))
-const loadRecentTraces = (serviceName: string) => runtime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listRecentTraces(serviceName)))
+interface LogState {
+	readonly status: LoadStatus
+	readonly traceId: string | null
+	readonly data: readonly LogItem[]
+	readonly error: string | null
+	readonly fetchedAt: Date | null
+}
+
+interface ServiceLogState {
+	readonly status: LoadStatus
+	readonly serviceName: string | null
+	readonly data: readonly LogItem[]
+	readonly error: string | null
+	readonly fetchedAt: Date | null
+}
+
+const loadTraceServices = () => queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listServices))
+const loadRecentTraces = (serviceName: string) => queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listRecentTraces(serviceName)))
+const loadTraceLogs = (traceId: string) => queryRuntime.runPromise(Effect.flatMap(LogQueryService.asEffect(), (service) => service.listTraceLogs(traceId)))
+const loadServiceLogs = (serviceName: string) => queryRuntime.runPromise(Effect.flatMap(LogQueryService.asEffect(), (service) => service.listRecentLogs(serviceName)))
 
 const colors = {
 	text: "#ede7da",
@@ -45,7 +65,26 @@ const initialTraceState: TraceState = {
 	fetchedAt: null,
 }
 
+const initialLogState: LogState = {
+	status: "ready",
+	traceId: null,
+	data: [],
+	error: null,
+	fetchedAt: null,
+}
+
+const initialServiceLogState: ServiceLogState = {
+	status: "ready",
+	serviceName: null,
+	data: [],
+	error: null,
+	fetchedAt: null,
+}
+
 const traceStateAtom = Atom.make(initialTraceState).pipe(Atom.keepAlive)
+const logStateAtom = Atom.make(initialLogState).pipe(Atom.keepAlive)
+const serviceLogStateAtom = Atom.make(initialServiceLogState).pipe(Atom.keepAlive)
+const selectedServiceLogIndexAtom = Atom.make(0).pipe(Atom.keepAlive)
 const selectedTraceIndexAtom = Atom.make(0).pipe(Atom.keepAlive)
 const selectedTraceServiceAtom = Atom.make<string | null>(config.otel.serviceName).pipe(Atom.keepAlive)
 const refreshNonceAtom = Atom.make(0).pipe(Atom.keepAlive)
@@ -111,8 +150,9 @@ const AlignedHeaderLine = ({ left, right, width, rightFg = colors.muted }: { lef
 const FooterHints = ({ spanNavActive, detailView, width }: { spanNavActive: boolean; detailView: DetailView; width: number }) => {
 	const firstLine = "j/k move  ^n/^p trace  ^d/^u page  gg/G top/end"
 	const secondLine = [
-		`enter ${spanNavActive && detailView === "waterfall" ? "detail" : "spans"}`,
+		detailView === "service-logs" ? "enter trace" : `enter ${spanNavActive && detailView === "waterfall" ? "detail" : "spans"}`,
 		spanNavActive ? `esc ${detailView === "span-detail" ? "back" : "traces"}` : null,
+		"tab/l logs",
 		"[ ] service",
 		"? hide",
 		"r ref",
@@ -176,49 +216,8 @@ const relativeTime = (date: Date) => {
 }
 
 const traceUiUrl = (traceId: string) => {
-	const baseUrl = config.otel.queryUrl.endsWith("/") ? config.otel.queryUrl : `${config.otel.queryUrl}/`
-	return new URL(`trace/${traceId}`, baseUrl).toString()
+	return resolveOtelUrl(`/trace/${traceId}`)
 }
-
-const effectSetupInstructions = () => `Set this app up to export local OpenTelemetry traces to my local Jaeger dev collector.
-
-Target endpoints:
-- OTLP HTTP ingest: ${config.otel.exporterUrl}
-- Jaeger query/UI: ${config.otel.queryUrl}
-
-If this codebase uses Effect beta, wire tracing like this:
-
-1. Install dependencies:
-   bun add @effect/opentelemetry @opentelemetry/exporter-trace-otlp-http @opentelemetry/sdk-trace-base @opentelemetry/sdk-trace-node
-
-2. Add a telemetry layer:
-
-import * as NodeSdk from "@effect/opentelemetry/NodeSdk"
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base"
-
-const TelemetryLive = NodeSdk.layer(() => ({
-  spanProcessor: new SimpleSpanProcessor(
-    new OTLPTraceExporter({
-      url: "${config.otel.exporterUrl}",
-    }),
-  ),
-  resource: {
-    serviceName: "<replace-service-name>",
-    attributes: {
-      "deployment.environment.name": "local",
-    },
-  },
-}))
-
-3. Merge that layer into the main runtime.
-
-4. Name important effects with Effect.fn("...") and add spans around meaningful workflows.
-
-5. Verify the service shows up in Jaeger:
-   curl ${config.otel.queryUrl}/api/services
-
-Keep the change minimal and idiomatic for the target repo.`
 
 const copyToClipboard = async (value: string) => {
 	const proc = Bun.spawn({
@@ -247,6 +246,56 @@ const traceIndicatorColor = (trace: TraceItem) => (trace.errorCount > 0 ? colors
 const traceSpanColor = (span: TraceSpanItem) => (span.status === "error" ? colors.error : colors.text)
 const traceRowId = (traceId: string) => `trace-row-${traceId}`
 const G_PREFIX_TIMEOUT_MS = 500
+
+const logSeverityColor = (severity: string) => {
+	if (severity.startsWith("ERROR") || severity.startsWith("FATAL")) return colors.error
+	if (severity.startsWith("WARN")) return colors.accent
+	return colors.count
+}
+
+const formatLogTimestamp = (timestamp: Date) => `${formatShortDate(timestamp)} ${formatTimestamp(timestamp)}`
+const logHeadline = (body: string) => body.split(/\r?\n/, 1)[0]?.replace(/\s+/g, " ").trim() || ""
+
+const wrapTextLines = (text: string, width: number, maxLines: number) => {
+	const normalized = text.replace(/\r/g, "")
+	const hardLines = normalized.split("\n")
+	const lines: string[] = []
+
+	for (const hardLine of hardLines) {
+		let remaining = hardLine
+		if (remaining.length === 0) {
+			lines.push("")
+			if (lines.length >= maxLines) return lines
+			continue
+		}
+		while (remaining.length > 0) {
+			lines.push(remaining.slice(0, width))
+			remaining = remaining.slice(width)
+			if (lines.length >= maxLines) {
+				if (remaining.length > 0) {
+					lines[maxLines - 1] = truncateText(lines[maxLines - 1]!, width)
+				}
+				return lines
+			}
+		}
+	}
+
+	return lines.slice(0, maxLines)
+}
+
+const relevantLogAttributes = (log: LogItem) =>
+	Object.entries(log.attributes).filter(([key]) =>
+		![
+			"deployment.environment.name",
+			"service.instance.id",
+			"service.name",
+			"telemetry.sdk.name",
+			"telemetry.sdk.language",
+			"fiberId",
+			"spanId",
+			"traceId",
+		].includes(key),
+	)
 
 const getTraceRowLayout = (contentWidth: number) => {
 	const stateWidth = 1
@@ -322,7 +371,7 @@ const TraceList = ({
 		<box flexDirection="column">
 			{status === "loading" && traces.length === 0 ? <PlainLine text="- Loading traces..." fg={colors.muted} /> : null}
 			{status === "error" ? <PlainLine text={`- ${error ?? "Could not load traces."}`} fg={colors.error} /> : null}
-			{status === "ready" && services.length === 0 ? <PlainLine text="- No services yet. Start Jaeger or emit local spans, then refresh." fg={colors.muted} /> : null}
+			{status === "ready" && services.length === 0 ? <PlainLine text="- No services yet. Start leto or emit local spans, then refresh." fg={colors.muted} /> : null}
 			{status === "ready" && selectedService && traces.length === 0 ? <PlainLine text="- No traces for the selected service in the current lookback window." fg={colors.muted} /> : null}
 			{traces.map((trace) => (
 				<TraceRow
@@ -402,8 +451,17 @@ const renderWaterfallBar = (span: TraceSpanItem, trace: TraceItem, barWidth: num
 	}
 }
 
+const getWaterfallLayout = (contentWidth: number, traceDurationMs: number) => {
+	const labelMaxWidth = Math.min(Math.floor(contentWidth * 0.4), 32)
+	const durationWidth = Math.max(8, formatDuration(traceDurationMs).length + 1)
+	const logWidth = 5
+	const barWidth = Math.max(6, contentWidth - labelMaxWidth - durationWidth - logWidth - 3)
+	return { labelMaxWidth, durationWidth, logWidth, barWidth }
+}
+
 const WaterfallRow = ({
 	span,
+	logCount,
 	trace,
 	index,
 	spans,
@@ -412,6 +470,7 @@ const WaterfallRow = ({
 	onSelect,
 }: {
 	span: TraceSpanItem
+	logCount: number
 	trace: TraceItem
 	index: number
 	spans: readonly TraceSpanItem[]
@@ -423,10 +482,9 @@ const WaterfallRow = ({
 	const indicator = span.status === "error" ? "!" : "·"
 	const opName = span.operationName
 	const duration = formatDuration(span.durationMs)
+	const logText = logCount > 0 ? `${logCount}lg` : ""
 
-	const labelMaxWidth = Math.min(Math.floor(contentWidth * 0.4), 32)
-	const durationWidth = duration.length + 1
-	const barWidth = Math.max(6, contentWidth - labelMaxWidth - durationWidth - 2)
+	const { labelMaxWidth, logWidth, barWidth } = getWaterfallLayout(contentWidth, trace.durationMs)
 
 	const opMaxWidth = Math.max(4, labelMaxWidth - prefix.length - 2)
 	const opTruncated = opName.length > opMaxWidth ? `${opName.slice(0, opMaxWidth - 1)}…` : opName
@@ -454,6 +512,8 @@ const WaterfallRow = ({
 				<span fg={waterfallColors.barBg}>{after}</span>
 				<span> </span>
 				<span fg={selected ? colors.accent : colors.count}>{duration}</span>
+				<span>{" ".repeat(Math.max(0, logWidth - logText.length))}</span>
+				<span fg={logCount > 0 ? colors.defaultService : colors.muted}>{logText}</span>
 			</TextLine>
 		</box>
 	)
@@ -467,7 +527,7 @@ const INTERESTING_TAGS = [
 	"net.peer.name", "net.peer.port",
 ] as const
 
-const spanPreviewEntries = (span: TraceSpanItem, maxEntries: number): Array<{ key: string; value: string; isWarning?: boolean }> => {
+const spanPreviewEntries = (span: TraceSpanItem, logs: readonly LogItem[], maxEntries: number): Array<{ key: string; value: string; isWarning?: boolean }> => {
 	const entries = Object.entries(span.tags)
 	const interesting = entries.filter(([key]) =>
 		INTERESTING_TAGS.includes(key as (typeof INTERESTING_TAGS)[number]) || key.startsWith("error"),
@@ -475,9 +535,15 @@ const spanPreviewEntries = (span: TraceSpanItem, maxEntries: number): Array<{ ke
 	const rest = entries.filter(([key]) =>
 		!INTERESTING_TAGS.includes(key as (typeof INTERESTING_TAGS)[number]) && !key.startsWith("error") && !key.startsWith("otel.") && key !== "span.kind",
 	)
-	const tagResults: Array<{ key: string; value: string; isWarning?: boolean }> = [...interesting, ...rest]
+	const tagResults: Array<{ key: string; value: string; isWarning?: boolean }> = []
+	if (logs.length > 0) {
+		tagResults.push({ key: "logs", value: `${logs.length} correlated` })
+		tagResults.push({ key: "log", value: logs[0]!.body.replace(/\s+/g, " ") })
+	}
+
+	tagResults.push(...[...interesting, ...rest]
 		.slice(0, maxEntries - span.warnings.length)
-		.map(([key, value]) => ({ key, value }))
+		.map(([key, value]) => ({ key, value })))
 	for (const warning of span.warnings) {
 		tagResults.push({ key: "warning", value: warning, isWarning: true })
 	}
@@ -486,14 +552,16 @@ const spanPreviewEntries = (span: TraceSpanItem, maxEntries: number): Array<{ ke
 
 const SpanPreview = ({
 	span,
+	logs,
 	contentWidth,
 	maxLines,
 }: {
 	span: TraceSpanItem
+	logs: readonly LogItem[]
 	contentWidth: number
 	maxLines: number
 }) => {
-	const entries = spanPreviewEntries(span, maxLines)
+	const entries = spanPreviewEntries(span, logs, maxLines)
 	if (entries.length === 0) return null
 
 	const maxKeyLen = Math.min(22, entries.reduce((max, e) => Math.max(max, e.key.length), 0))
@@ -533,25 +601,27 @@ const SpanPreview = ({
 
 const WaterfallTimeline = ({
 	trace,
+	spanLogCounts,
+	selectedSpanLogs,
 	contentWidth,
 	bodyLines,
 	selectedSpanIndex,
 	onSelectSpan,
 }: {
 	trace: TraceItem
+	spanLogCounts: ReadonlyMap<string, number>
+	selectedSpanLogs: readonly LogItem[]
 	contentWidth: number
 	bodyLines: number
 	selectedSpanIndex: number | null
 	onSelectSpan: (index: number) => void
 }) => {
 	const selectedSpan = selectedSpanIndex !== null ? trace.spans[selectedSpanIndex] ?? null : null
-	const previewTagCount = selectedSpan ? spanPreviewEntries(selectedSpan, 99).length : 0
+	const previewTagCount = selectedSpan ? spanPreviewEntries(selectedSpan, selectedSpanLogs, 99).length : 0
 	const previewLines = selectedSpan ? Math.min(Math.max(previewTagCount, 1), Math.max(2, Math.floor(bodyLines * 0.4))) : 0
 	const waterfallLines = bodyLines - 1 - previewLines
 
-	const labelMaxWidth = Math.min(Math.floor(contentWidth * 0.4), 32)
-	const durationWidth = 8
-	const barWidth = Math.max(6, contentWidth - labelMaxWidth - durationWidth - 2)
+	const { labelMaxWidth, durationWidth, barWidth } = getWaterfallLayout(contentWidth, trace.durationMs)
 	const midDuration = formatDuration(trace.durationMs / 2)
 	const endDuration = formatDuration(trace.durationMs)
 
@@ -582,6 +652,7 @@ const WaterfallTimeline = ({
 				<WaterfallRow
 					key={`${trace.traceId}-${span.spanId}`}
 					span={span}
+					logCount={spanLogCounts.get(span.spanId) ?? 0}
 					trace={trace}
 					index={actualIndex}
 					spans={trace.spans}
@@ -600,16 +671,25 @@ const WaterfallTimeline = ({
 
 const SpanDetailView = ({
 	span,
+	logs,
 	contentWidth,
 	bodyLines,
 }: {
 	span: TraceSpanItem
+	logs: readonly LogItem[]
 	contentWidth: number
 	bodyLines: number
 }) => {
 	const tagEntries = Object.entries(span.tags)
 	const maxKeyLen = Math.min(28, tagEntries.reduce((max, [key]) => Math.max(max, key.length), 0))
-	const maxLines = bodyLines - 4
+	const maxLogLines = logs.length > 0 ? Math.min(4, Math.max(1, Math.floor(bodyLines * 0.3))) : 0
+	const visibleLogs = logs.slice(0, maxLogLines)
+	const visibleWarnings = span.warnings.slice(0, visibleLogs.length > 0 ? 1 : 2)
+	const visibleEvents = span.events.slice(0, 2)
+	const reservedForWarnings = visibleWarnings.length > 0 ? visibleWarnings.length + 2 : 0
+	const reservedForEvents = visibleEvents.length > 0 ? visibleEvents.length + 2 : 0
+	const reservedForLogs = visibleLogs.length > 0 ? visibleLogs.reduce((total, log) => total + 3 + Math.min(3, wrapTextLines(log.body, Math.max(16, contentWidth - 2), 3).length), 1) : 0
+	const maxTagLines = Math.max(0, bodyLines - 4 - reservedForWarnings - reservedForEvents - reservedForLogs)
 
 	return (
 		<box flexDirection="column">
@@ -629,7 +709,7 @@ const SpanDetailView = ({
 					<TextLine>
 						<span fg={colors.accent} attributes={TextAttributes.BOLD}>TAGS</span>
 					</TextLine>
-					{tagEntries.slice(0, maxLines).map(([key, value]) => {
+					{tagEntries.slice(0, maxTagLines).map(([key, value]) => {
 						const keyStr = key.length > maxKeyLen ? `${key.slice(0, maxKeyLen - 1)}…` : key.padEnd(maxKeyLen)
 						const valMaxWidth = Math.max(8, contentWidth - maxKeyLen - 2)
 						const valStr = value.length > valMaxWidth ? `${value.slice(0, valMaxWidth - 1)}…` : value
@@ -642,30 +722,197 @@ const SpanDetailView = ({
 							</TextLine>
 						)
 					})}
-					{tagEntries.length > maxLines ? (
-						<PlainLine text={`  … ${tagEntries.length - maxLines} more`} fg={colors.muted} />
+					{tagEntries.length > maxTagLines ? (
+						<PlainLine text={`  … ${tagEntries.length - maxTagLines} more`} fg={colors.muted} />
 					) : null}
 				</>
 			) : (
 				<PlainLine text="No tags on this span." fg={colors.muted} />
 			)}
-			{span.warnings.length > 0 ? (
+			{visibleWarnings.length > 0 ? (
 				<>
 					<BlankRow />
 					<TextLine>
 						<span fg={colors.accent} attributes={TextAttributes.BOLD}>WARNINGS</span>
 					</TextLine>
-					{span.warnings.map((warning, i) => (
+					{visibleWarnings.map((warning, i) => (
 						<PlainLine key={i} text={warning} fg={colors.error} />
 					))}
+				</>
+			) : null}
+			{visibleEvents.length > 0 ? (
+				<>
+					<BlankRow />
+					<TextLine>
+						<span fg={colors.accent} attributes={TextAttributes.BOLD}>EVENTS</span>
+					</TextLine>
+					{visibleEvents.map((event, index) => {
+						const preview = Object.entries(event.attributes).slice(0, 1)
+						return (
+							<box key={`${event.name}-${index}`} flexDirection="column">
+								<TextLine>
+									<span fg={colors.muted}>{formatTimestamp(event.timestamp)}</span>
+									<span fg={colors.separator}>{SEPARATOR}</span>
+									<span fg={colors.text}>{event.name}</span>
+								</TextLine>
+								{preview.map(([key, value]) => (
+									<TextLine key={`${event.name}-${key}`}>
+										<span fg={colors.count}>{truncateText(key, 18).padEnd(18, " ")}</span>
+										<span fg={colors.muted}> </span>
+										<span fg={colors.muted}>{truncateText(value, Math.max(12, contentWidth - 20))}</span>
+									</TextLine>
+								))}
+							</box>
+						)
+					})}
+				</>
+			) : null}
+			{visibleLogs.length > 0 ? (
+				<>
+					<BlankRow />
+					<TextLine>
+						<span fg={colors.accent} attributes={TextAttributes.BOLD}>RELATED LOGS</span>
+					</TextLine>
+					{visibleLogs.map((log) => {
+						const bodyLines = wrapTextLines(log.body, Math.max(16, contentWidth - 2), 3)
+						const attributePreview = relevantLogAttributes(log).slice(0, 1)
+
+						return (
+							<box key={log.id} flexDirection="column">
+								<TextLine>
+									<span fg={colors.muted}>{formatTimestamp(log.timestamp)}</span>
+									<span fg={colors.separator}>{SEPARATOR}</span>
+									<span fg={logSeverityColor(log.severityText)}>{log.severityText.toLowerCase()}</span>
+									<span fg={colors.separator}>{SEPARATOR}</span>
+									<span fg={colors.defaultService}>{log.scopeName ?? log.serviceName}</span>
+								</TextLine>
+								{bodyLines.map((line, index) => (
+									<PlainLine key={`${log.id}-body-${index}`} text={line} fg={colors.text} />
+								))}
+								{attributePreview.map(([key, value]) => (
+									<TextLine key={`${log.id}-${key}`}>
+										<span fg={colors.count}>{truncateText(key, 18).padEnd(18, " ")}</span>
+										<span fg={colors.muted}> </span>
+										<span fg={colors.muted}>{truncateText(value, Math.max(12, contentWidth - 20))}</span>
+									</TextLine>
+								))}
+							</box>
+						)
+					})}
 				</>
 			) : null}
 		</box>
 	)
 }
 
+const ServiceLogsView = ({
+	serviceName,
+	logsState,
+	selectedIndex,
+	onSelectLog,
+	contentWidth,
+	bodyLines,
+}: {
+	serviceName: string | null
+	logsState: ServiceLogState
+	selectedIndex: number
+	onSelectLog: (index: number) => void
+	contentWidth: number
+	bodyLines: number
+}) => {
+	const timeWidth = 8
+	const levelWidth = 5
+	const traceWidth = 8
+	const messageWidth = Math.max(16, contentWidth - timeWidth - levelWidth - traceWidth - 3)
+
+	if (logsState.status === "loading" && logsState.data.length === 0) {
+		return <PlainLine text="Loading recent service logs..." fg={colors.muted} />
+	}
+
+	if (logsState.status === "error") {
+		return <PlainLine text={logsState.error ?? "Could not load logs."} fg={colors.error} />
+	}
+
+	if (logsState.data.length === 0) {
+		return <PlainLine text={`No logs captured yet for service ${serviceName ?? "unknown"}.`} fg={colors.muted} />
+	}
+
+	const safeSelectedIndex = Math.max(0, Math.min(selectedIndex, logsState.data.length - 1))
+	const selectedLog = logsState.data[safeSelectedIndex] ?? null
+	const detailWidth = Math.max(16, contentWidth - 2)
+	const detailBodyLines = selectedLog ? wrapTextLines(selectedLog.body, detailWidth, 6) : []
+	const detailAttributeLines = selectedLog ? relevantLogAttributes(selectedLog).slice(0, 3) : []
+	const detailHeight = selectedLog ? 3 + detailBodyLines.length + detailAttributeLines.length : 0
+	const listHeight = Math.max(4, bodyLines - detailHeight - 1)
+	const windowStart = Math.max(0, Math.min(safeSelectedIndex - Math.floor(listHeight / 2), logsState.data.length - listHeight))
+	const visibleLogs = logsState.data.slice(windowStart, windowStart + listHeight)
+	const blankCount = Math.max(0, listHeight - visibleLogs.length)
+
+	return (
+		<box flexDirection="column">
+			{selectedLog ? (
+				<>
+					<TextLine>
+						<span fg={logSeverityColor(selectedLog.severityText)}>{selectedLog.severityText.toLowerCase()}</span>
+						<span fg={colors.separator}>{SEPARATOR}</span>
+						<span fg={colors.muted}>{formatLogTimestamp(selectedLog.timestamp)}</span>
+						<span fg={colors.separator}>{SEPARATOR}</span>
+						<span fg={colors.count}>{selectedLog.traceId ? selectedLog.traceId.slice(-8) : "no-trace"}</span>
+					</TextLine>
+					<TextLine>
+						<span fg={colors.defaultService}>{selectedLog.scopeName ?? selectedLog.serviceName}</span>
+						{selectedLog.spanId ? <><span fg={colors.separator}>{SEPARATOR}</span><span fg={colors.muted}>{selectedLog.spanId.slice(-8)}</span></> : null}
+					</TextLine>
+					{detailBodyLines.map((line, index) => (
+						<PlainLine key={`log-detail-${selectedLog.id}-${index}`} text={line} fg={colors.text} />
+					))}
+					{detailAttributeLines.map(([key, value]) => (
+						<TextLine key={`log-attr-${selectedLog.id}-${key}`}>
+							<span fg={colors.count}>{truncateText(key, 18).padEnd(18, " ")}</span>
+							<span fg={colors.muted}> </span>
+							<span fg={colors.muted}>{truncateText(value, Math.max(12, detailWidth - 20))}</span>
+						</TextLine>
+					))}
+					<Divider width={contentWidth} />
+				</>
+			) : null}
+			<TextLine fg={colors.muted}>
+				<span>{fitCell("time", timeWidth)}</span>
+				<span> </span>
+				<span>{fitCell("lvl", levelWidth)}</span>
+				<span> </span>
+				<span>{fitCell("trace", traceWidth)}</span>
+				<span> </span>
+				<span>{fitCell("message", messageWidth)}</span>
+			</TextLine>
+			{visibleLogs.map((log, index) => {
+				const actualIndex = windowStart + index
+				const selected = actualIndex === safeSelectedIndex
+				const trace = log.traceId ? log.traceId.slice(-8) : "-"
+				return (
+					<box key={log.id} height={1} onMouseDown={() => onSelectLog(actualIndex)}>
+						<TextLine fg={selected ? colors.selectedText : colors.text} bg={selected ? colors.selectedBg : undefined}>
+							<span fg={colors.muted}>{fitCell(formatTimestamp(log.timestamp), timeWidth)}</span>
+							<span> </span>
+							<span fg={logSeverityColor(log.severityText)}>{fitCell(log.severityText.toLowerCase(), levelWidth)}</span>
+							<span> </span>
+							<span fg={colors.count}>{fitCell(trace, traceWidth)}</span>
+							<span> </span>
+							<span fg={selected ? colors.selectedText : colors.text}>{fitCell(logHeadline(log.body), messageWidth)}</span>
+						</TextLine>
+					</box>
+				)
+			})}
+			{Array.from({ length: blankCount }, (_, index) => (
+				<BlankRow key={`log-blank-${index}`} />
+			))}
+		</box>
+	)
+}
+
 const TraceDetailsPane = ({
 	trace,
+	traceLogsState,
 	contentWidth,
 	bodyLines,
 	paneWidth,
@@ -674,6 +921,7 @@ const TraceDetailsPane = ({
 	onSelectSpan,
 }: {
 	trace: TraceItem | null
+	traceLogsState: LogState
 	contentWidth: number
 	bodyLines: number
 	paneWidth: number
@@ -682,11 +930,20 @@ const TraceDetailsPane = ({
 	onSelectSpan: (index: number) => void
 }) => {
 	const selectedSpan = trace && selectedSpanIndex !== null ? trace.spans[selectedSpanIndex] ?? null : null
-	const detailHeaderTitle = detailView === "span-detail" && selectedSpan ? "SPAN DETAIL" : "TRACE DETAILS"
+	const traceLogCount = traceLogsState.data.length
+	const selectedSpanLogs = selectedSpan ? traceLogsState.data.filter((log) => log.spanId === selectedSpan.spanId) : []
+	const spanLogCounts = new Map<string, number>()
+	for (const log of traceLogsState.data) {
+		if (!log.spanId) continue
+		spanLogCounts.set(log.spanId, (spanLogCounts.get(log.spanId) ?? 0) + 1)
+	}
+	const detailHeaderTitle = detailView === "span-detail" && selectedSpan
+		? "SPAN DETAIL"
+			: "TRACE DETAILS"
 	const detailHeaderRight = detailView === "span-detail" && selectedSpan
-		? `${selectedSpan.status} · ${formatDuration(selectedSpan.durationMs)}`
+		? `${selectedSpan.status} · ${formatDuration(selectedSpan.durationMs)}${selectedSpanLogs.length > 0 ? ` · ${selectedSpanLogs.length} logs` : ""}`
 		: trace
-			? `${trace.errorCount > 0 ? `${trace.errorCount} errors` : "healthy"} · ${formatDuration(trace.durationMs)}`
+			? `${trace.errorCount > 0 ? `${trace.errorCount} errors` : "healthy"} · ${formatDuration(trace.durationMs)}${traceLogCount > 0 ? ` · ${traceLogCount} logs` : ""}`
 			: "waiting for trace"
 	const detailHeaderColor = detailView === "span-detail" && selectedSpan
 		? selectedSpan.status === "error"
@@ -705,7 +962,7 @@ const TraceDetailsPane = ({
 				<>
 					{detailView === "span-detail" && selectedSpan ? (
 						<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-							<SpanDetailView span={selectedSpan} contentWidth={contentWidth} bodyLines={bodyLines + 2} />
+							<SpanDetailView span={selectedSpan} logs={selectedSpanLogs} contentWidth={contentWidth} bodyLines={bodyLines + 2} />
 						</box>
 					) : (
 						<>
@@ -737,6 +994,8 @@ const TraceDetailsPane = ({
 							<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 								<WaterfallTimeline
 									trace={trace}
+									spanLogCounts={spanLogCounts}
+									selectedSpanLogs={selectedSpanLogs}
 									contentWidth={contentWidth}
 									bodyLines={bodyLines}
 									selectedSpanIndex={selectedSpanIndex}
@@ -745,12 +1004,12 @@ const TraceDetailsPane = ({
 							</box>
 							{selectedSpan ? (
 								<>
-									<Divider width={paneWidth} />
-									<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-										<SpanPreview span={selectedSpan} contentWidth={contentWidth} maxLines={Math.min(spanPreviewEntries(selectedSpan, 99).length, Math.max(2, Math.floor(bodyLines * 0.4)))} />
-									</box>
-								</>
-							) : null}
+								<Divider width={paneWidth} />
+								<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+									<SpanPreview span={selectedSpan} logs={selectedSpanLogs} contentWidth={contentWidth} maxLines={Math.min(spanPreviewEntries(selectedSpan, selectedSpanLogs, 99).length, Math.max(2, Math.floor(bodyLines * 0.4)))} />
+								</box>
+							</>
+						) : null}
 						</>
 					)}
 				</>
@@ -769,6 +1028,9 @@ const TraceDetailsPane = ({
 export const App = () => {
 	const { width, height } = useTerminalDimensions()
 	const [traceState, setTraceState] = useAtom(traceStateAtom)
+	const [logState, setLogState] = useAtom(logStateAtom)
+	const [serviceLogState, setServiceLogState] = useAtom(serviceLogStateAtom)
+	const [selectedServiceLogIndex, setSelectedServiceLogIndex] = useAtom(selectedServiceLogIndexAtom)
 	const [selectedTraceIndex, setSelectedTraceIndex] = useAtom(selectedTraceIndexAtom)
 	const [selectedTraceService, setSelectedTraceService] = useAtom(selectedTraceServiceAtom)
 	const [refreshNonce, setRefreshNonce] = useAtom(refreshNonceAtom)
@@ -893,6 +1155,111 @@ export const App = () => {
 
 		traceListScrollRef.current?.scrollChildIntoView(traceRowId(selectedTraceId))
 	}, [selectedTraceIndex, traceState.data, selectedTraceService, isWideLayout])
+
+	useEffect(() => {
+		const traceId = selectedTrace?.traceId
+		if (!traceId) {
+			setLogState(initialLogState)
+			return
+		}
+
+		let cancelled = false
+
+		const load = async () => {
+			setLogState((current) => ({
+				status: current.traceId === traceId && current.fetchedAt !== null ? "ready" : "loading",
+				traceId,
+				data: current.traceId === traceId ? current.data : [],
+				error: null,
+				fetchedAt: current.traceId === traceId ? current.fetchedAt : null,
+			}))
+
+			try {
+				const logs = await loadTraceLogs(traceId)
+				if (cancelled) return
+
+				setLogState({
+					status: "ready",
+					traceId,
+					data: logs,
+					error: null,
+					fetchedAt: new Date(),
+				})
+			} catch (error) {
+				if (cancelled) return
+				setLogState({
+					status: "error",
+					traceId,
+					data: [],
+					error: error instanceof Error ? error.message : String(error),
+					fetchedAt: null,
+				})
+			}
+		}
+
+		void load()
+
+		return () => {
+			cancelled = true
+		}
+	}, [refreshNonce, selectedTrace?.traceId, setLogState])
+
+	useEffect(() => {
+		if (detailView !== "service-logs") return
+
+		const serviceName = selectedTraceService
+		if (!serviceName) {
+			setServiceLogState(initialServiceLogState)
+			return
+		}
+
+		let cancelled = false
+
+		const load = async () => {
+			setServiceLogState((current) => ({
+				status: current.serviceName === serviceName && current.fetchedAt !== null ? "ready" : "loading",
+				serviceName,
+				data: current.serviceName === serviceName ? current.data : [],
+				error: null,
+				fetchedAt: current.serviceName === serviceName ? current.fetchedAt : null,
+			}))
+
+			try {
+				const logs = await loadServiceLogs(serviceName)
+				if (cancelled) return
+
+				setServiceLogState({
+					status: "ready",
+					serviceName,
+					data: logs,
+					error: null,
+					fetchedAt: new Date(),
+				})
+			} catch (error) {
+				if (cancelled) return
+				setServiceLogState({
+					status: "error",
+					serviceName,
+					data: [],
+					error: error instanceof Error ? error.message : String(error),
+					fetchedAt: null,
+				})
+			}
+		}
+
+		void load()
+
+		return () => {
+			cancelled = true
+		}
+	}, [detailView, refreshNonce, selectedTraceService, setServiceLogState])
+
+	useEffect(() => {
+		setSelectedServiceLogIndex((current) => {
+			if (serviceLogState.data.length === 0) return 0
+			return Math.max(0, Math.min(current, serviceLogState.data.length - 1))
+		})
+	}, [serviceLogState.data.length, setSelectedServiceLogIndex])
 	const headerLeft = `LETO OTEL  service: ${selectedTraceService ?? "none"}`
 	const headerRight = traceState.fetchedAt
 		? `updated ${formatShortDate(traceState.fetchedAt)} ${formatTimestamp(traceState.fetchedAt)}`
@@ -940,7 +1307,17 @@ export const App = () => {
 		})
 	}
 
-	const spanNavActive = selectedSpanIndex !== null
+	const moveServiceLogBy = (direction: -1 | 1) => {
+		setSelectedServiceLogIndex((current) => {
+			if (serviceLogState.data.length === 0) return 0
+			return direction < 0
+				? current <= 0 ? serviceLogState.data.length - 1 : current - 1
+				: current >= serviceLogState.data.length - 1 ? 0 : current + 1
+		})
+	}
+
+	const spanNavActive = detailView !== "service-logs" && selectedSpanIndex !== null
+	const serviceLogNavActive = detailView === "service-logs"
 
 	const clearPendingG = () => {
 		pendingGRef.current = false
@@ -976,7 +1353,13 @@ export const App = () => {
 	}
 
 	const pageBy = (direction: -1 | 1) => {
-		if (spanNavActive && selectedTrace) {
+		if (serviceLogNavActive) {
+			const serviceLogPageSize = Math.max(1, Math.floor((isWideLayout ? wideBodyLines : narrowBodyLines) * 0.5))
+			setSelectedServiceLogIndex((current) => {
+				if (serviceLogState.data.length === 0) return 0
+				return Math.max(0, Math.min(current + direction * serviceLogPageSize, serviceLogState.data.length - 1))
+			})
+		} else if (spanNavActive && selectedTrace) {
 			setSelectedSpanIndex((current) => {
 				if (selectedTrace.spans.length === 0) return null
 				const start = current ?? 0
@@ -993,6 +1376,11 @@ export const App = () => {
 	const selectSpan = (index: number) => {
 		if (!selectedTrace) return
 		setSelectedSpanIndex(Math.max(0, Math.min(index, selectedTrace.spans.length - 1)))
+	}
+
+	const toggleServiceLogsView = () => {
+		if (!selectedTraceService && !selectedTrace) return
+		setDetailView((current) => current === "service-logs" ? (selectedSpanIndex !== null ? "span-detail" : "waterfall") : "service-logs")
 	}
 
 	useKeyboard((key) => {
@@ -1028,11 +1416,19 @@ export const App = () => {
 			process.exit(0)
 		}
 		if (key.name === "home") {
-			jumpToStart()
+			if (serviceLogNavActive) {
+				setSelectedServiceLogIndex(0)
+			} else {
+				jumpToStart()
+			}
 			return
 		}
 		if (key.name === "end") {
-			jumpToEnd()
+			if (serviceLogNavActive) {
+				setSelectedServiceLogIndex(serviceLogState.data.length === 0 ? 0 : serviceLogState.data.length - 1)
+			} else {
+				jumpToEnd()
+			}
 			return
 		}
 		if (key.name === "pagedown" || (key.ctrl && key.name === "d")) {
@@ -1056,7 +1452,7 @@ export const App = () => {
 				setShowHelp(false)
 				return
 			}
-			if (detailView === "span-detail") {
+			if (detailView === "span-detail" || detailView === "service-logs") {
 				setDetailView("waterfall")
 				return
 			}
@@ -1067,6 +1463,18 @@ export const App = () => {
 			return
 		}
 		if (key.name === "return" || key.name === "enter") {
+			if (detailView === "service-logs") {
+				const selectedLog = serviceLogState.data[selectedServiceLogIndex]
+				if (selectedLog?.traceId) {
+					const traceIndex = traceState.data.findIndex((trace) => trace.traceId === selectedLog.traceId)
+					if (traceIndex >= 0) {
+						setSelectedTraceIndex(traceIndex)
+						setDetailView("waterfall")
+						flashNotice(`Jumped to trace ${selectedLog.traceId.slice(-8)}`)
+					}
+				}
+				return
+			}
 			if (spanNavActive && detailView === "waterfall") {
 				setDetailView("span-detail")
 				return
@@ -1081,6 +1489,10 @@ export const App = () => {
 			refresh("Refreshing traces...")
 			return
 		}
+		if (key.name === "l" || key.name === "tab") {
+			toggleServiceLogsView()
+			return
+		}
 		if (key.name === "[") {
 			cycleService(-1)
 			return
@@ -1090,7 +1502,9 @@ export const App = () => {
 			return
 		}
 		if (key.name === "up" || key.name === "k") {
-			if (spanNavActive && selectedTrace) {
+			if (serviceLogNavActive) {
+				moveServiceLogBy(-1)
+			} else if (spanNavActive && selectedTrace) {
 				setSelectedSpanIndex((current) => {
 					if (current === null || selectedTrace.spans.length === 0) return 0
 					return current <= 0 ? selectedTrace.spans.length - 1 : current - 1
@@ -1101,7 +1515,9 @@ export const App = () => {
 			return
 		}
 		if (key.name === "down" || key.name === "j") {
-			if (spanNavActive && selectedTrace) {
+			if (serviceLogNavActive) {
+				moveServiceLogBy(1)
+			} else if (spanNavActive && selectedTrace) {
 				setSelectedSpanIndex((current) => {
 					if (current === null || selectedTrace.spans.length === 0) return 0
 					return current >= selectedTrace.spans.length - 1 ? 0 : current + 1
@@ -1111,7 +1527,16 @@ export const App = () => {
 			}
 			return
 		}
-		if (key.name === "o" && selectedTrace) {
+		if (key.name === "o") {
+			if (serviceLogNavActive) {
+				const selectedLog = serviceLogState.data[selectedServiceLogIndex]
+				if (selectedLog?.traceId) {
+					void Bun.spawn({ cmd: ["open", traceUiUrl(selectedLog.traceId)], stdout: "ignore", stderr: "ignore" })
+					flashNotice(`Opened trace ${selectedLog.traceId.slice(-8)}`)
+				}
+				return
+			}
+			if (!selectedTrace) return
 			void Bun.spawn({ cmd: ["open", traceUiUrl(selectedTrace.traceId)], stdout: "ignore", stderr: "ignore" })
 			flashNotice(`Opened trace ${selectedTrace.traceId.slice(-8)}`)
 			return
@@ -1132,8 +1557,31 @@ export const App = () => {
 			<box paddingLeft={1} paddingRight={1} flexDirection="column">
 				<PlainLine text={headerLine} fg={colors.muted} bold />
 			</box>
-			{isWideLayout ? <Divider width={contentWidth} junctionAt={dividerJunctionAt} junctionChar="┬" /> : <Divider width={contentWidth} />}
-			{isWideLayout ? (
+			<Divider width={contentWidth} junctionAt={detailView === "service-logs" ? undefined : isWideLayout ? dividerJunctionAt : undefined} junctionChar={detailView === "service-logs" ? undefined : isWideLayout ? "┬" : undefined} />
+			{detailView === "service-logs" ? (
+				<box flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<AlignedHeaderLine
+						left="SERVICE LOGS"
+						right={`${serviceLogState.data.length} logs${serviceLogState.fetchedAt ? ` · ${formatShortDate(serviceLogState.fetchedAt)} ${formatTimestamp(serviceLogState.fetchedAt)}` : ""}`}
+						width={headerFooterWidth}
+						rightFg={colors.count}
+					/>
+					<TextLine>
+						<span fg={colors.defaultService}>{selectedTraceService ?? "unknown"}</span>
+						<span fg={colors.separator}>{SEPARATOR}</span>
+						<span fg={colors.count}>recent logs</span>
+					</TextLine>
+					<BlankRow />
+					<ServiceLogsView
+						serviceName={selectedTraceService}
+						logsState={serviceLogState}
+						selectedIndex={selectedServiceLogIndex}
+						onSelectLog={setSelectedServiceLogIndex}
+						contentWidth={headerFooterWidth}
+						bodyLines={Math.max(8, availableContentHeight - 3)}
+					/>
+				</box>
+			) : isWideLayout ? (
 				<box flexGrow={1} flexDirection="row">
 					<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column" paddingLeft={sectionPadding} paddingRight={sectionPadding}>
 						<TraceList
@@ -1164,13 +1612,13 @@ export const App = () => {
 					<SeparatorColumn height={wideBodyHeight} junctionRow={DETAIL_DIVIDER_ROW} />
 					<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
 						<scrollbox height={wideBodyHeight} flexGrow={0}>
-							<TraceDetailsPane trace={selectedTrace} contentWidth={rightContentWidth} bodyLines={wideBodyLines} paneWidth={rightPaneWidth} selectedSpanIndex={selectedSpanIndex} detailView={detailView} onSelectSpan={selectSpan} />
+							<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={wideBodyLines} paneWidth={rightPaneWidth} selectedSpanIndex={selectedSpanIndex} detailView={detailView} onSelectSpan={selectSpan} />
 						</scrollbox>
 					</box>
 				</box>
 			) : (
 				<>
-					<TraceDetailsPane trace={selectedTrace} contentWidth={rightContentWidth} bodyLines={narrowBodyLines} paneWidth={contentWidth} selectedSpanIndex={selectedSpanIndex} detailView={detailView} onSelectSpan={selectSpan} />
+					<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={narrowBodyLines} paneWidth={contentWidth} selectedSpanIndex={selectedSpanIndex} detailView={detailView} onSelectSpan={selectSpan} />
 					<Divider width={contentWidth} />
 					<box height={narrowListHeight} flexDirection="column" paddingLeft={sectionPadding} paddingRight={sectionPadding}>
 						<TraceList
@@ -1202,7 +1650,7 @@ export const App = () => {
 			)}
 			{footerHeight > 0 ? (
 				<>
-					{isWideLayout ? <Divider width={contentWidth} junctionAt={dividerJunctionAt} junctionChar="┴" /> : <Divider width={contentWidth} />}
+					<Divider width={contentWidth} junctionAt={detailView === "service-logs" ? undefined : isWideLayout ? dividerJunctionAt : undefined} junctionChar={detailView === "service-logs" ? undefined : isWideLayout ? "┴" : undefined} />
 					<box paddingLeft={1} paddingRight={1} flexDirection="column" height={footerHeight}>
 						{visibleFooterNotice ? (
 							<PlainLine text={visibleFooterNotice} fg={colors.count} />

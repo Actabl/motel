@@ -1,72 +1,18 @@
+import { Effect, References } from "effect"
 import { config } from "./config.js"
-
-const buildQueryUrl = (path: string, searchParams: Readonly<Record<string, string | number | undefined>> = {}) => {
-	const baseUrl = config.otel.queryUrl.endsWith("/") ? config.otel.queryUrl : `${config.otel.queryUrl}/`
-	const url = new URL(path.startsWith("/") ? path.slice(1) : path, baseUrl)
-
-	for (const [key, value] of Object.entries(searchParams)) {
-		if (value === undefined || value === "") continue
-		url.searchParams.set(key, String(value))
-	}
-
-	return url
-}
-
-const effectSetupInstructions = () => `Set this app up to export local OpenTelemetry traces to my local Jaeger dev collector.
-
-Target endpoints:
-- OTLP HTTP ingest: ${config.otel.exporterUrl}
-- Jaeger query/UI: ${config.otel.queryUrl}
-
-If this codebase uses Effect beta, wire tracing like this:
-
-1. Install dependencies:
-   bun add @effect/opentelemetry @opentelemetry/exporter-trace-otlp-http @opentelemetry/sdk-trace-base @opentelemetry/sdk-trace-node
-
-2. Add a telemetry layer:
-
-import * as NodeSdk from "@effect/opentelemetry/NodeSdk"
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base"
-
-const TelemetryLive = NodeSdk.layer(() => ({
-  spanProcessor: new SimpleSpanProcessor(
-    new OTLPTraceExporter({
-      url: "${config.otel.exporterUrl}",
-    }),
-  ),
-  resource: {
-    serviceName: "<replace-service-name>",
-    attributes: {
-      "deployment.environment.name": "local",
-    },
-  },
-}))
-
-3. Merge that layer into the main runtime.
-
-4. Name important effects with Effect.fn("...") and add spans around meaningful workflows.
-
-5. Verify the service shows up in Jaeger:
-   curl ${config.otel.queryUrl}/api/services
-
-Keep the change minimal and idiomatic for the target repo.`
-
-const fetchJson = async (url: URL) => {
-	const response = await fetch(url, { signal: AbortSignal.timeout(5000) })
-	if (!response.ok) {
-		const detail = await response.text()
-		throw new Error(`Query failed ${response.status}: ${detail.trim() || response.statusText}`)
-	}
-
-	return await response.json()
-}
+import { effectSetupInstructions } from "./instructions.js"
+import { queryRuntime } from "./runtime.js"
+import { LogQueryService } from "./services/LogQueryService.js"
+import { TraceQueryService } from "./services/TraceQueryService.js"
 
 const [command, ...args] = process.argv.slice(2)
 
+const runQuiet = <A, E, R extends TraceQueryService | LogQueryService | never>(effect: Effect.Effect<A, E, R>) =>
+	queryRuntime.runPromise(effect.pipe(Effect.provideService(References.MinimumLogLevel, "None")))
+
 switch (command) {
 	case "services": {
-		const result = await fetchJson(buildQueryUrl("/api/services"))
+		const result = await runQuiet(Effect.flatMap(TraceQueryService.asEffect(), (query) => query.listServices))
 		console.log(JSON.stringify(result, null, 2))
 		break
 	}
@@ -74,7 +20,7 @@ switch (command) {
 	case "traces": {
 		const service = args[0] ?? config.otel.serviceName
 		const limit = args[1] ? Number.parseInt(args[1], 10) : config.otel.traceFetchLimit
-		const result = await fetchJson(buildQueryUrl("/api/traces", { service, limit, lookback: "1h" }))
+		const result = await runQuiet(Effect.flatMap(TraceQueryService.asEffect(), (query) => query.listRecentTraces(service, { limit })))
 		console.log(JSON.stringify(result, null, 2))
 		break
 	}
@@ -85,7 +31,7 @@ switch (command) {
 			throw new Error("Usage: bun run cli trace <trace-id>")
 		}
 
-		const result = await fetchJson(buildQueryUrl(`/api/traces/${traceId}`))
+		const result = await runQuiet(Effect.flatMap(TraceQueryService.asEffect(), (query) => query.getTrace(traceId)))
 		console.log(JSON.stringify(result, null, 2))
 		break
 	}
@@ -95,10 +41,31 @@ switch (command) {
 		break
 	}
 
+	case "logs": {
+		const service = args[0] ?? config.otel.serviceName
+		const result = await runQuiet(Effect.flatMap(LogQueryService.asEffect(), (query) => query.listRecentLogs(service)))
+		console.log(JSON.stringify(result, null, 2))
+		break
+	}
+
+	case "trace-logs": {
+		const traceId = args[0]
+		if (!traceId) {
+			throw new Error("Usage: bun run cli trace-logs <trace-id>")
+		}
+
+		const result = await runQuiet(Effect.flatMap(LogQueryService.asEffect(), (query) => query.listTraceLogs(traceId)))
+		console.log(JSON.stringify(result, null, 2))
+		break
+	}
+
 	case "endpoints": {
 		console.log(JSON.stringify({
+			baseUrl: config.otel.baseUrl,
 			exporterUrl: config.otel.exporterUrl,
+			logsExporterUrl: config.otel.logsExporterUrl,
 			queryUrl: config.otel.queryUrl,
+			databasePath: config.otel.databasePath,
 		}, null, 2))
 		break
 	}
@@ -108,6 +75,8 @@ switch (command) {
 	bun run cli services
 	bun run cli traces [service] [limit]
 	bun run cli trace <trace-id>
+	bun run cli logs [service]
+	bun run cli trace-logs <trace-id>
 	bun run cli instructions
 	bun run cli endpoints`)
 	}

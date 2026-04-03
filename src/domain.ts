@@ -1,9 +1,17 @@
 export type TraceSpanStatus = "ok" | "error"
 
+export interface TraceSpanEvent {
+	readonly name: string
+	readonly timestamp: Date
+	readonly attributes: Readonly<Record<string, string>>
+}
+
 export interface TraceSpanItem {
 	readonly spanId: string
 	readonly parentSpanId: string | null
 	readonly serviceName: string
+	readonly scopeName: string | null
+	readonly kind: string | null
 	readonly operationName: string
 	readonly startTime: Date
 	readonly durationMs: number
@@ -11,6 +19,7 @@ export interface TraceSpanItem {
 	readonly depth: number
 	readonly tags: Readonly<Record<string, string>>
 	readonly warnings: readonly string[]
+	readonly events: readonly TraceSpanEvent[]
 }
 
 export interface TraceItem {
@@ -23,4 +32,16 @@ export interface TraceItem {
 	readonly errorCount: number
 	readonly warnings: readonly string[]
 	readonly spans: readonly TraceSpanItem[]
+}
+
+export interface LogItem {
+	readonly id: string
+	readonly timestamp: Date
+	readonly serviceName: string
+	readonly severityText: string
+	readonly body: string
+	readonly traceId: string | null
+	readonly spanId: string | null
+	readonly scopeName: string | null
+	readonly attributes: Readonly<Record<string, string>>
 }
