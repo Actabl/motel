@@ -10,7 +10,7 @@ export const truncateText = (text: string, width: number) => {
 }
 
 export const fitCell = (text: string, width: number, align: "left" | "right" = "left") => {
-	const trimmed = text.length > width ? `${text.slice(0, Math.max(0, width - 3))}...` : text
+	const trimmed = truncateText(text, width)
 	return align === "right" ? trimmed.padStart(width, " ") : trimmed.padEnd(width, " ")
 }
 

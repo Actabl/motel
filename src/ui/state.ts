@@ -1,5 +1,7 @@
 import { Effect } from "effect"
 import * as Atom from "effect/unstable/reactivity/Atom"
+import { readFileSync } from "node:fs"
+import { dirname } from "node:path"
 import { config } from "../config.ts"
 import type { LogItem, TraceItem } from "../domain.ts"
 import { queryRuntime } from "../runtime.ts"
@@ -62,7 +64,17 @@ export const logStateAtom = Atom.make(initialLogState).pipe(Atom.keepAlive)
 export const serviceLogStateAtom = Atom.make(initialServiceLogState).pipe(Atom.keepAlive)
 export const selectedServiceLogIndexAtom = Atom.make(0).pipe(Atom.keepAlive)
 export const selectedTraceIndexAtom = Atom.make(0).pipe(Atom.keepAlive)
-export const selectedTraceServiceAtom = Atom.make<string | null>(config.otel.serviceName).pipe(Atom.keepAlive)
+const lastServicePath = `${dirname(config.otel.databasePath)}/last-service.txt`
+const readLastService = (): string | null => {
+	try { return readFileSync(lastServicePath, "utf-8").trim() || null }
+	catch { return null }
+}
+
+export const persistSelectedService = (service: string) => {
+	Bun.write(lastServicePath, service).catch(() => {})
+}
+
+export const selectedTraceServiceAtom = Atom.make<string | null>(readLastService() ?? config.otel.serviceName).pipe(Atom.keepAlive)
 export const refreshNonceAtom = Atom.make(0).pipe(Atom.keepAlive)
 export const noticeAtom = Atom.make<string | null>(null).pipe(Atom.keepAlive)
 export const selectedSpanIndexAtom = Atom.make<number | null>(null).pipe(Atom.keepAlive)

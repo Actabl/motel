@@ -17,6 +17,7 @@ import {
 	loadTraceServices,
 	logStateAtom,
 	noticeAtom,
+	persistSelectedService,
 	refreshNonceAtom,
 	selectedServiceLogIndexAtom,
 	selectedSpanIndexAtom,
@@ -97,6 +98,14 @@ export const App = () => {
 			clearTimeout(noticeTimeoutRef.current)
 		}
 	}, [])
+
+	const initialServiceRef = useRef(selectedTraceService)
+	useEffect(() => {
+		if (selectedTraceService && selectedTraceService !== initialServiceRef.current) {
+			persistSelectedService(selectedTraceService)
+		}
+		initialServiceRef.current = null
+	}, [selectedTraceService])
 
 	// Load traces
 	useEffect(() => {

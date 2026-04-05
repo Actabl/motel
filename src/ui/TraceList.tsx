@@ -65,13 +65,11 @@ export const TraceList = ({
 }) => {
 	if (showHeader) {
 		return (
-			<box flexDirection="column">
-				<AlignedHeaderLine
-					left="LOCAL TRACES"
-					right={`service \u00b7 ${selectedService ?? "waiting for traces"} (${services.length}) \u00b7 ${config.otel.queryUrl}`}
-					width={contentWidth}
-				/>
-			</box>
+			<AlignedHeaderLine
+				left="LOCAL TRACES"
+				right={`service \u00b7 ${selectedService ?? "waiting for traces"} (${services.length}) \u00b7 ${config.otel.queryUrl}`}
+				width={contentWidth}
+			/>
 		)
 	}
 
