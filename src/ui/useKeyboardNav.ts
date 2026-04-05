@@ -24,6 +24,7 @@ import { findFirstChildIndex, findParentIndex, getVisibleSpans } from "./Waterfa
 
 interface KeyboardNavParams {
 	selectedTrace: TraceItem | null
+	filteredTraces: readonly TraceItem[]
 	isWideLayout: boolean
 	wideBodyLines: number
 	narrowBodyLines: number
@@ -87,13 +88,21 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 
 	const $ = () => stateRef.current
 
+	const selectFilteredTraceAt = (filteredIdx: number) => {
+		const s = $()
+		const trace = s.filteredTraces[filteredIdx]
+		if (!trace) return
+		const fullIndex = s.traceState.data.findIndex((t) => t.traceId === trace.traceId)
+		if (fullIndex >= 0) setSelectedTraceIndex(fullIndex)
+	}
+
 	const jumpToStart = () => {
 		const s = $()
 		if (s.spanNavActive && s.selectedTrace) {
 			const visibleCount = getVisibleSpans(s.selectedTrace.spans, s.collapsedSpanIds).length
 			setSelectedSpanIndex(visibleCount === 0 ? null : 0)
 		} else {
-			setSelectedTraceIndex(0)
+			selectFilteredTraceAt(0)
 		}
 	}
 
@@ -103,18 +112,27 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			const visibleCount = getVisibleSpans(s.selectedTrace.spans, s.collapsedSpanIds).length
 			setSelectedSpanIndex(visibleCount === 0 ? null : visibleCount - 1)
 		} else {
-			setSelectedTraceIndex(s.traceState.data.length === 0 ? 0 : s.traceState.data.length - 1)
+			selectFilteredTraceAt(s.filteredTraces.length - 1)
 		}
 	}
 
 	const moveTraceBy = (direction: -1 | 1) => {
 		const s = $()
-		setSelectedTraceIndex((current) => {
-			if (s.traceState.data.length === 0) return 0
-			return direction < 0
-				? current <= 0 ? s.traceState.data.length - 1 : current - 1
-				: current >= s.traceState.data.length - 1 ? 0 : current + 1
-		})
+		const filtered = s.filteredTraces
+		if (filtered.length === 0) return
+		// Find the current trace's position in the filtered list
+		const currentFilteredIdx = s.selectedTrace
+			? filtered.findIndex((t) => t.traceId === s.selectedTrace!.traceId)
+			: -1
+		const nextFilteredIdx = currentFilteredIdx < 0
+			? 0
+			: direction < 0
+				? currentFilteredIdx <= 0 ? filtered.length - 1 : currentFilteredIdx - 1
+				: currentFilteredIdx >= filtered.length - 1 ? 0 : currentFilteredIdx + 1
+		const nextTrace = filtered[nextFilteredIdx]
+		if (!nextTrace) return
+		const fullIndex = s.traceState.data.findIndex((t) => t.traceId === nextTrace.traceId)
+		if (fullIndex >= 0) setSelectedTraceIndex(fullIndex)
 	}
 
 	const moveServiceLogBy = (direction: -1 | 1) => {
@@ -163,10 +181,13 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 				return Math.max(0, Math.min(start + direction * s.spanPageSize, visibleCount - 1))
 			})
 		} else {
-			setSelectedTraceIndex((current) => {
-				if (s.traceState.data.length === 0) return 0
-				return Math.max(0, Math.min(current + direction * s.tracePageSize, s.traceState.data.length - 1))
-			})
+			const filtered = s.filteredTraces
+			if (filtered.length === 0) return
+			const currentFilteredIdx = s.selectedTrace
+				? filtered.findIndex((t) => t.traceId === s.selectedTrace!.traceId)
+				: 0
+			const nextIdx = Math.max(0, Math.min(currentFilteredIdx + direction * s.tracePageSize, filtered.length - 1))
+			selectFilteredTraceAt(nextIdx)
 		}
 	}
 

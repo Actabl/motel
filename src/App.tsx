@@ -206,10 +206,14 @@ export const App = () => {
 
 	// Scroll selected trace into view
 	useEffect(() => {
-		const selectedTraceId = traceState.data[selectedTraceIndex]?.traceId
-		if (!selectedTraceId) return
-		traceListScrollRef.current?.scrollChildIntoView(traceRowId(selectedTraceId))
-	}, [selectedTraceIndex, traceState.data, selectedTraceService, isWideLayout])
+		const traceId = selectedTrace?.traceId
+		if (!traceId) return
+		// Defer to next tick so the scrollbox has rendered the updated children
+		const id = setTimeout(() => {
+			traceListScrollRef.current?.scrollChildIntoView(traceRowId(traceId))
+		}, 0)
+		return () => clearTimeout(id)
+	}, [selectedTraceIndex, selectedTrace?.traceId, filterText])
 
 	// Load trace logs
 	useEffect(() => {
@@ -319,9 +323,22 @@ export const App = () => {
 		})
 	}, [serviceLogState.data.length, setSelectedServiceLogIndex])
 
+	// Apply trace filter
+	const filteredTraces = filterText
+		? traceState.data.filter((trace) => {
+			const needle = filterText.toLowerCase()
+			const errorOnly = needle.includes(":error")
+			const textNeedle = needle.replace(":error", "").trim()
+			if (errorOnly && trace.errorCount === 0) return false
+			if (textNeedle && !trace.rootOperationName.toLowerCase().includes(textNeedle)) return false
+			return true
+		})
+		: traceState.data
+
 	// Keyboard navigation
 	const { spanNavActive } = useKeyboardNav({
 		selectedTrace,
+		filteredTraces,
 		isWideLayout,
 		wideBodyLines,
 		narrowBodyLines,
@@ -351,18 +368,6 @@ export const App = () => {
 		const visibleCount = getVisibleSpans(selectedTrace.spans, collapsedSpanIds).length
 		setSelectedSpanIndex(Math.max(0, Math.min(index, visibleCount - 1)))
 	}
-
-	// Apply trace filter
-	const filteredTraces = filterText
-		? traceState.data.filter((trace) => {
-			const needle = filterText.toLowerCase()
-			const errorOnly = needle.includes(":error")
-			const textNeedle = needle.replace(":error", "").trim()
-			if (errorOnly && trace.errorCount === 0) return false
-			if (textNeedle && !trace.rootOperationName.toLowerCase().includes(textNeedle)) return false
-			return true
-		})
-		: traceState.data
 
 	const traceListProps = {
 		traces: filteredTraces,
