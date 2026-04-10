@@ -88,8 +88,13 @@ const Stat = Schema.Struct({
 const ServiceList = Schema.Struct({ data: Schema.Array(Schema.String) })
 const Health = Schema.Struct({
 	ok: Schema.Boolean,
-	service: Schema.String,
+	service: Schema.String.pipe(Schema.annotateKey({ description: "Stable identity string. Always 'leto-local-server' — used by the MCP shim to detect impostor processes on a stale port." })),
 	databasePath: Schema.String,
+	pid: Schema.Number.pipe(Schema.annotateKey({ description: "Process ID of this leto instance. Used by the MCP shim to verify a registry entry points at the expected process." })),
+	url: Schema.String.pipe(Schema.annotateKey({ description: "Base URL this instance is actually bound to, including the dynamically-chosen port." })),
+	workdir: Schema.String.pipe(Schema.annotateKey({ description: "Working directory at the time the server started. Used by MCP discovery to match the current project via longest-prefix." })),
+	startedAt: Schema.String.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp of when the server bound its port." })),
+	version: Schema.String.pipe(Schema.annotateKey({ description: "Leto version string." })),
 })
 const IngestTraceResponse = Schema.Struct({ insertedSpans: Schema.Number })
 const IngestLogResponse = Schema.Struct({ insertedLogs: Schema.Number })
@@ -131,8 +136,8 @@ export const LetoHttpApi = HttpApi.make("LetoTelemetry")
 					.annotate(OpenApi.Description, "Human-readable overview of the local telemetry server routes."),
 
 				HttpApiEndpoint.get("health", "/api/health", { success: Health })
-					.annotate(OpenApi.Summary, "Health check")
-					.annotate(OpenApi.Description, "Returns basic health and storage information for the local telemetry server."),
+					.annotate(OpenApi.Summary, "Health check and identity handshake")
+					.annotate(OpenApi.Description, "Returns liveness plus identity fields (pid, url, workdir, startedAt, version). Doubles as the MCP discovery handshake: clients compare the returned pid against a registry entry to detect stale registrations that now point at an impostor process on the same port."),
 
 				HttpApiEndpoint.post("ingestTraces", "/v1/traces", {
 					payload: Schema.Unknown,

@@ -6,6 +6,7 @@ import * as HttpServer from "effect/unstable/http/HttpServer"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import { LetoHttpApi } from "./httpApi.js"
 import { attributeFiltersFromEntries, ATTRIBUTE_FILTER_PREFIX } from "./queryFilters.js"
+import { LETO_VERSION, writeRegistryEntry } from "./registry.js"
 import { TelemetryStore, TelemetryStoreLive } from "./services/TelemetryStore.js"
 import type { LogItem, TraceItem, TraceSummaryItem } from "./domain.js"
 
@@ -20,6 +21,13 @@ const LOG_MAX_LOOKBACK = 24 * 60
 
 let server: ReturnType<typeof Bun.serve> | null = null
 let disposeWebHandler: (() => Promise<void>) | null = null
+let startedAt: string | null = null
+
+const resolveBoundUrl = () => {
+	if (!server) return config.otel.queryUrl
+	const host = server.hostname === "0.0.0.0" || server.hostname === "::" ? "127.0.0.1" : server.hostname
+	return `http://${host}:${server.port}`
+}
 
 const jsonResponse = (value: unknown, status = 200) => HttpServerResponse.jsonUnsafe(value, { status })
 const textResponse = (value: string) => HttpServerResponse.text(value)
@@ -247,7 +255,18 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			.handleRaw("root", () =>
 				Effect.succeed(textResponse("leto local telemetry server\n\nPOST /v1/traces\nPOST /v1/logs\nGET /api/services\nGET /api/traces\nGET /api/traces/search\nGET /api/traces/stats\nGET /api/traces/<trace-id>\nGET /api/traces/<trace-id>/spans\nGET /api/traces/<trace-id>/logs\nGET /api/spans/search\nGET /api/spans/<span-id>\nGET /api/spans/<span-id>/logs\nGET /api/logs\nGET /api/logs/search\nGET /api/logs/stats\nGET /api/facets?type=logs&field=severity\nGET /openapi.json\nGET /docs\nGET /trace/<trace-id>\n")),
 			)
-			.handle("health", () => Effect.succeed({ ok: true, service: "leto-local-server", databasePath: config.otel.databasePath }))
+			.handle("health", () =>
+				Effect.succeed({
+					ok: true,
+					service: "leto-local-server",
+					databasePath: config.otel.databasePath,
+					pid: process.pid,
+					url: resolveBoundUrl(),
+					workdir: process.cwd(),
+					startedAt: startedAt ?? new Date(0).toISOString(),
+					version: LETO_VERSION,
+				}),
+			)
 			.handleRaw("ingestTraces", ({ request }) =>
 				respondRaw(
 					Effect.flatMap(request.json, (payload) =>
@@ -526,6 +545,18 @@ export const startLocalServer = async () => {
 			return handler(request)
 		},
 	})
+	startedAt = new Date().toISOString()
+	try {
+		writeRegistryEntry({
+			pid: process.pid,
+			url: resolveBoundUrl(),
+			workdir: process.cwd(),
+			startedAt,
+			version: LETO_VERSION,
+		})
+	} catch (err) {
+		console.warn(`leto: failed to write registry entry: ${(err as Error).message}`)
+	}
 	return server
 }
 

@@ -1,11 +1,16 @@
 {
   "name": "leto",
+  "version": "0.1.0",
   "type": "module",
   "private": true,
+  "bin": {
+    "leto-mcp": "src/mcp.ts"
+  },
   "scripts": {
     "dev": "bun run src/index.tsx",
     "start": "bun run src/index.tsx",
     "server": "bun run src/server.ts",
+    "mcp": "bun run src/mcp.ts",
     "test": "bun test",
     "cli": "bun run src/cli.ts",
     "instructions": "bun run src/cli.ts instructions",
@@ -28,6 +33,7 @@
   "dependencies": {
     "@effect/atom-react": "^4.0.0-beta.43",
     "@effect/opentelemetry": "^4.0.0-beta.43",
+    "@effect/platform-bun": "^4.0.0-beta.43",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-logs-otlp-http": "^0.214.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.211.0",
