@@ -129,6 +129,22 @@ const listMeta = (input: { readonly limit: number; readonly lookbackMinutes: num
 	nextCursor: input.nextCursor,
 })
 
+const paginateTraces = (traces: readonly TraceItem[], options: { readonly limit: number; readonly lookbackMinutes: number; readonly cursor: CursorShape | null }) => {
+	const scoped = applyTraceCursor(traces, options.cursor)
+	const page = scoped.slice(0, options.limit)
+	const last = page.at(-1)
+	return {
+		data: page.map(traceSummary),
+		meta: listMeta({
+			limit: options.limit,
+			lookbackMinutes: options.lookbackMinutes,
+			returned: page.length,
+			truncated: scoped.length > page.length,
+			nextCursor: last ? encodeCursor({ kind: "trace", startedAt: last.startedAt.getTime(), id: last.traceId }) : null,
+		}),
+	}
+}
+
 const paginateLogs = (logs: readonly LogItem[], options: { readonly limit: number; readonly lookbackMinutes: number; readonly cursor: CursorShape | null }) => {
 	const scoped = applyLogCursor(logs, options.cursor)
 	const page = scoped.slice(0, options.limit)
@@ -173,6 +189,25 @@ const loadLogsPage = (input: {
 			}),
 		),
 	)
+
+const handleLogSearch = (request: { readonly url: string }) =>
+	respondRaw(Effect.gen(function*() {
+		const url = requestUrl(request)
+		const attributeFilters = attributeFiltersFromQuery(url)
+		const limit = parseBoundedLimit(url.searchParams.get("limit"), LOG_DEFAULT_LIMIT, LOG_MAX_LIMIT)
+		const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), LOG_DEFAULT_LOOKBACK, LOG_MAX_LOOKBACK)
+		const cursor = decodeCursor(url.searchParams.get("cursor"))
+		return jsonResponse(yield* loadLogsPage({
+			serviceName: url.searchParams.get("service"),
+			traceId: url.searchParams.get("traceId"),
+			spanId: url.searchParams.get("spanId"),
+			body: url.searchParams.get("body"),
+			attributeFilters,
+			limit,
+			lookbackMinutes,
+			cursor,
+		}))
+	}))
 
 const escapeHtml = (value: string) =>
 	value
@@ -290,19 +325,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
 					const cursor = decodeCursor(url.searchParams.get("cursor"))
 					const data = yield* withStore((store) => store.listRecentTraces(service, { limit: TRACE_MAX_LIMIT + 1, lookbackMinutes }))
-					const scoped = applyTraceCursor(data, cursor)
-					const page = scoped.slice(0, limit)
-					const last = page.at(-1)
-					return jsonResponse({
-						data: page.map(traceSummary),
-						meta: listMeta({
-							limit,
-							lookbackMinutes,
-							returned: page.length,
-							truncated: scoped.length > page.length,
-							nextCursor: last ? encodeCursor({ kind: "trace", startedAt: last.startedAt.getTime(), id: last.traceId }) : null,
-						}),
-					})
+					return jsonResponse(paginateTraces(data, { limit, lookbackMinutes, cursor }))
 				})),
 			)
 			.handleRaw("searchTraces", ({ request }) =>
@@ -323,19 +346,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 							lookbackMinutes,
 						}),
 					)
-					const scoped = applyTraceCursor(data, cursor)
-					const page = scoped.slice(0, limit)
-					const last = page.at(-1)
-					return jsonResponse({
-						data: page.map(traceSummary),
-						meta: listMeta({
-							limit,
-							lookbackMinutes,
-							returned: page.length,
-							truncated: scoped.length > page.length,
-							nextCursor: last ? encodeCursor({ kind: "trace", startedAt: last.startedAt.getTime(), id: last.traceId }) : null,
-						}),
-					})
+					return jsonResponse(paginateTraces(data, { limit, lookbackMinutes, cursor }))
 				})),
 			)
 			.handleRaw("traceStats", ({ request }) =>
@@ -430,44 +441,8 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					),
 				),
 			)
-			.handleRaw("logs", ({ request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const attributeFilters = attributeFiltersFromQuery(url)
-					const limit = parseBoundedLimit(url.searchParams.get("limit"), LOG_DEFAULT_LIMIT, LOG_MAX_LIMIT)
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), LOG_DEFAULT_LOOKBACK, LOG_MAX_LOOKBACK)
-					const cursor = decodeCursor(url.searchParams.get("cursor"))
-					return jsonResponse(yield* loadLogsPage({
-						serviceName: url.searchParams.get("service"),
-						traceId: url.searchParams.get("traceId"),
-						spanId: url.searchParams.get("spanId"),
-						body: url.searchParams.get("body"),
-						attributeFilters,
-						limit,
-						lookbackMinutes,
-						cursor,
-					}))
-				})),
-			)
-			.handleRaw("searchLogs", ({ request }) =>
-				respondRaw(Effect.gen(function*() {
-					const url = requestUrl(request)
-					const attributeFilters = attributeFiltersFromQuery(url)
-					const limit = parseBoundedLimit(url.searchParams.get("limit"), LOG_DEFAULT_LIMIT, LOG_MAX_LIMIT)
-					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), LOG_DEFAULT_LOOKBACK, LOG_MAX_LOOKBACK)
-					const cursor = decodeCursor(url.searchParams.get("cursor"))
-					return jsonResponse(yield* loadLogsPage({
-						serviceName: url.searchParams.get("service"),
-						traceId: url.searchParams.get("traceId"),
-						spanId: url.searchParams.get("spanId"),
-						body: url.searchParams.get("body"),
-						attributeFilters,
-						limit,
-						lookbackMinutes,
-						cursor,
-					}))
-				})),
-			)
+			.handleRaw("logs", ({ request }) => handleLogSearch(request))
+			.handleRaw("searchLogs", ({ request }) => handleLogSearch(request))
 			.handleRaw("logStats", ({ request }) =>
 				respondRaw(Effect.gen(function*() {
 					const url = requestUrl(request)

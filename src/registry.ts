@@ -21,6 +21,7 @@ export type RegistryEntry = {
 const entryPath = (pid: number) => path.join(registryDir(), `${pid}.json`)
 
 let currentEntryPath: string | null = null
+let signalHandlersRegistered = false
 
 const cleanup = () => {
 	if (!currentEntryPath) return
@@ -72,11 +73,14 @@ export const writeRegistryEntry = (entry: RegistryEntry) => {
 	const file = entryPath(entry.pid)
 	fs.writeFileSync(file, JSON.stringify(entry, null, 2), "utf8")
 	currentEntryPath = file
-	process.on("exit", cleanup)
-	for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-		process.on(sig, () => {
-			cleanup()
-			process.exit(0)
-		})
+	if (!signalHandlersRegistered) {
+		signalHandlersRegistered = true
+		process.on("exit", cleanup)
+		for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+			process.on(sig, () => {
+				cleanup()
+				process.exit(0)
+			})
+		}
 	}
 }

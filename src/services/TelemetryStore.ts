@@ -250,21 +250,6 @@ export class TelemetryStore extends ServiceMap.Service<
 	}
 >()("motel/TelemetryStore") {}
 
-export interface TelemetryStoreOptions {
-	readonly databasePath: string
-	readonly retentionHours: number
-	readonly traceLookbackMinutes: number
-	readonly traceFetchLimit: number
-	readonly logFetchLimit: number
-}
-
-const defaultOptions: TelemetryStoreOptions = {
-	databasePath: config.otel.databasePath,
-	retentionHours: config.otel.retentionHours,
-	traceLookbackMinutes: config.otel.traceLookbackMinutes,
-	traceFetchLimit: config.otel.traceFetchLimit,
-	logFetchLimit: config.otel.logFetchLimit,
-}
 
 export const TelemetryStoreLive = Layer.effect(
 	TelemetryStore,
