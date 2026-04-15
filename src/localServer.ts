@@ -99,26 +99,6 @@ const formatLookback = (minutes: number) => {
 	return `${minutes}m`
 }
 
-const applySummaryCursor = (summaries: readonly TraceSummaryItem[], cursor: CursorShape | null) => {
-	if (!cursor || cursor.kind !== "trace") return summaries
-	return summaries.filter((summary) => {
-		const startedAt = summary.startedAt.getTime()
-		if (startedAt < cursor.startedAt) return true
-		if (startedAt > cursor.startedAt) return false
-		return summary.traceId < cursor.id
-	})
-}
-
-const applyLogCursor = (logs: readonly LogItem[], cursor: CursorShape | null) => {
-	if (!cursor || cursor.kind !== "log") return logs
-	return logs.filter((log) => {
-		const timestamp = log.timestamp.getTime()
-		if (timestamp < cursor.timestamp) return true
-		if (timestamp > cursor.timestamp) return false
-		return log.id < cursor.id
-	})
-}
-
 const listMeta = (input: { readonly limit: number; readonly lookbackMinutes: number; readonly returned: number; readonly truncated: boolean; readonly nextCursor: string | null }) => ({
 	limit: input.limit,
 	lookback: formatLookback(input.lookbackMinutes),
@@ -128,8 +108,7 @@ const listMeta = (input: { readonly limit: number; readonly lookbackMinutes: num
 })
 
 const paginateSummaries = (summaries: readonly TraceSummaryItem[], options: { readonly limit: number; readonly lookbackMinutes: number; readonly cursor: CursorShape | null }) => {
-	const scoped = applySummaryCursor(summaries, options.cursor)
-	const page = scoped.slice(0, options.limit)
+	const page = summaries.slice(0, options.limit)
 	const last = page.at(-1)
 	return {
 		data: page,
@@ -137,15 +116,14 @@ const paginateSummaries = (summaries: readonly TraceSummaryItem[], options: { re
 			limit: options.limit,
 			lookbackMinutes: options.lookbackMinutes,
 			returned: page.length,
-			truncated: scoped.length > page.length,
+			truncated: summaries.length > page.length,
 			nextCursor: last ? encodeCursor({ kind: "trace", startedAt: last.startedAt.getTime(), id: last.traceId }) : null,
 		}),
 	}
 }
 
 const paginateLogs = (logs: readonly LogItem[], options: { readonly limit: number; readonly lookbackMinutes: number; readonly cursor: CursorShape | null }) => {
-	const scoped = applyLogCursor(logs, options.cursor)
-	const page = scoped.slice(0, options.limit)
+	const page = logs.slice(0, options.limit)
 	const last = page.at(-1)
 
 	return {
@@ -154,7 +132,7 @@ const paginateLogs = (logs: readonly LogItem[], options: { readonly limit: numbe
 			limit: options.limit,
 			lookbackMinutes: options.lookbackMinutes,
 			returned: page.length,
-			truncated: scoped.length > page.length,
+			truncated: logs.length > page.length,
 			nextCursor: last ? encodeCursor({ kind: "log", timestamp: last.timestamp.getTime(), id: last.id }) : null,
 		}),
 	}
@@ -182,6 +160,8 @@ const loadLogsPage = (input: {
 				body: input.body,
 				lookbackMinutes: input.lookbackMinutes,
 				limit: input.limit + 1,
+				cursorTimestampMs: input.cursor?.kind === "log" ? input.cursor.timestamp : undefined,
+				cursorId: input.cursor?.kind === "log" ? input.cursor.id : undefined,
 				attributeFilters: input.attributeFilters,
 				attributeContainsFilters: input.attributeContainsFilters,
 			}),
@@ -330,7 +310,12 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					const limit = parseBoundedLimit(url.searchParams.get("limit"), TRACE_DEFAULT_LIMIT, TRACE_MAX_LIMIT)
 					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
 					const cursor = decodeCursor(url.searchParams.get("cursor"))
-					const data = yield* withStore((store) => store.listTraceSummaries(service, { limit: limit + 1, lookbackMinutes }))
+					const data = yield* withStore((store) => store.listTraceSummaries(service, {
+						limit: limit + 1,
+						lookbackMinutes,
+						cursorStartedAtMs: cursor?.kind === "trace" ? cursor.startedAt : undefined,
+						cursorTraceId: cursor?.kind === "trace" ? cursor.id : undefined,
+					}))
 					return jsonResponse(paginateSummaries(data, { limit, lookbackMinutes, cursor }))
 				})),
 			)
@@ -350,6 +335,8 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 							attributeFilters,
 							limit: limit + 1,
 							lookbackMinutes,
+							cursorStartedAtMs: cursor?.kind === "trace" ? cursor.startedAt : undefined,
+							cursorTraceId: cursor?.kind === "trace" ? cursor.id : undefined,
 						}),
 					)
 					return jsonResponse(paginateSummaries(data, { limit, lookbackMinutes, cursor }))

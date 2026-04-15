@@ -3,7 +3,7 @@ import * as Atom from "effect/unstable/reactivity/Atom"
 import { readFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { config } from "../config.ts"
-import type { LogItem, TraceItem } from "../domain.ts"
+import type { LogItem, TraceItem, TraceSummaryItem } from "../domain.ts"
 import { queryRuntime } from "../runtime.ts"
 import { LogQueryService } from "../services/LogQueryService.ts"
 import { TraceQueryService } from "../services/TraceQueryService.ts"
@@ -14,7 +14,15 @@ export type DetailView = "waterfall" | "span-detail" | "service-logs"
 export interface TraceState {
 	readonly status: LoadStatus
 	readonly services: readonly string[]
-	readonly data: readonly TraceItem[]
+	readonly data: readonly TraceSummaryItem[]
+	readonly error: string | null
+	readonly fetchedAt: Date | null
+}
+
+export interface TraceDetailState {
+	readonly status: LoadStatus
+	readonly traceId: string | null
+	readonly data: TraceItem | null
 	readonly error: string | null
 	readonly fetchedAt: Date | null
 }
@@ -51,6 +59,14 @@ export const initialLogState: LogState = {
 	fetchedAt: null,
 }
 
+export const initialTraceDetailState: TraceDetailState = {
+	status: "ready",
+	traceId: null,
+	data: null,
+	error: null,
+	fetchedAt: null,
+}
+
 export const initialServiceLogState: ServiceLogState = {
 	status: "ready",
 	serviceName: null,
@@ -60,6 +76,7 @@ export const initialServiceLogState: ServiceLogState = {
 }
 
 export const traceStateAtom = Atom.make(initialTraceState).pipe(Atom.keepAlive)
+export const traceDetailStateAtom = Atom.make(initialTraceDetailState).pipe(Atom.keepAlive)
 export const logStateAtom = Atom.make(initialLogState).pipe(Atom.keepAlive)
 export const serviceLogStateAtom = Atom.make(initialServiceLogState).pipe(Atom.keepAlive)
 export const selectedServiceLogIndexAtom = Atom.make(0).pipe(Atom.keepAlive)
@@ -93,6 +110,7 @@ export const traceSortAtom = Atom.make<TraceSortMode>("recent").pipe(Atom.keepAl
 export const collapsedSpanIdsAtom = Atom.make(new Set<string>() as ReadonlySet<string>).pipe(Atom.keepAlive)
 
 export const loadTraceServices = () => queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listServices))
-export const loadRecentTraces = (serviceName: string) => queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listRecentTraces(serviceName)))
+export const loadRecentTraceSummaries = (serviceName: string) => queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listTraceSummaries(serviceName)))
+export const loadTraceDetail = (traceId: string) => queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.getTrace(traceId)))
 export const loadTraceLogs = (traceId: string) => queryRuntime.runPromise(Effect.flatMap(LogQueryService.asEffect(), (service) => service.listTraceLogs(traceId)))
 export const loadServiceLogs = (serviceName: string) => queryRuntime.runPromise(Effect.flatMap(LogQueryService.asEffect(), (service) => service.listRecentLogs(serviceName)))

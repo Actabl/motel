@@ -1,5 +1,5 @@
 import { resolveOtelUrl } from "../config.ts"
-import type { LogItem, TraceItem } from "../domain.ts"
+import type { LogItem } from "../domain.ts"
 import { colors } from "./theme.ts"
 
 export const truncateText = (text: string, width: number) => {
@@ -65,8 +65,8 @@ export const wrapTextLines = (text: string, width: number, maxLines: number) => 
 	return lines.slice(0, maxLines)
 }
 
-export const traceIndicator = (trace: TraceItem) => (trace.errorCount > 0 ? "!" : "\u00b7")
-export const traceIndicatorColor = (trace: TraceItem) => (trace.errorCount > 0 ? colors.error : colors.passing)
+export const traceIndicator = (trace: { readonly errorCount: number }) => (trace.errorCount > 0 ? "!" : "\u00b7")
+export const traceIndicatorColor = (trace: { readonly errorCount: number }) => (trace.errorCount > 0 ? colors.error : colors.passing)
 export const traceRowId = (traceId: string) => `trace-row-${traceId}`
 
 export const logSeverityColor = (severity: string) => {

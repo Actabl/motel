@@ -1,5 +1,5 @@
 import { Effect, Layer, ServiceMap } from "effect"
-import type { SpanItem, TraceItem } from "../domain.js"
+import type { SpanItem, TraceItem, TraceSummaryItem } from "../domain.js"
 import { TelemetryStore } from "./TelemetryStore.js"
 
 export class TraceQueryService extends ServiceMap.Service<
@@ -7,6 +7,7 @@ export class TraceQueryService extends ServiceMap.Service<
 	{
 		readonly listServices: Effect.Effect<readonly string[], Error>
 		readonly listRecentTraces: (serviceName: string, options?: { readonly lookbackMinutes?: number; readonly limit?: number }) => Effect.Effect<readonly TraceItem[], Error>
+		readonly listTraceSummaries: (serviceName: string, options?: { readonly lookbackMinutes?: number; readonly limit?: number }) => Effect.Effect<readonly TraceSummaryItem[], Error>
 		readonly searchTraces: (input: { readonly serviceName?: string | null; readonly operation?: string | null; readonly status?: "ok" | "error" | null; readonly minDurationMs?: number | null; readonly lookbackMinutes?: number; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) => Effect.Effect<readonly TraceItem[], Error>
 		readonly traceStats: (input: { readonly groupBy: string; readonly agg: "count" | "avg_duration" | "p95_duration" | "error_rate"; readonly serviceName?: string | null; readonly operation?: string | null; readonly status?: "ok" | "error" | null; readonly minDurationMs?: number | null; readonly lookbackMinutes?: number; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) => Effect.Effect<readonly { readonly group: string; readonly value: number; readonly count: number }[], Error>
 		readonly getTrace: (traceId: string) => Effect.Effect<TraceItem | null, Error>
@@ -36,6 +37,15 @@ export const TraceQueryServiceLive = Layer.effect(
 			return traces
 		})
 
+		const listTraceSummaries = Effect.fn("motel/TraceQueryService.listTraceSummaries")(function* (serviceName: string, options?: { readonly lookbackMinutes?: number; readonly limit?: number }) {
+			yield* Effect.annotateCurrentSpan({
+				"trace.service_name": serviceName,
+			})
+			const traces = yield* store.listTraceSummaries(serviceName, options)
+			yield* Effect.annotateCurrentSpan("trace.result_count", traces.length)
+			return traces
+		})
+
 		const getTrace = Effect.fn("motel/TraceQueryService.getTrace")(function* (traceId: string) {
 			yield* Effect.annotateCurrentSpan("trace.trace_id", traceId)
 			return yield* store.getTrace(traceId)
@@ -49,6 +59,7 @@ export const TraceQueryServiceLive = Layer.effect(
 		return TraceQueryService.of({
 			listServices,
 			listRecentTraces,
+			listTraceSummaries,
 			searchTraces: store.searchTraces,
 			traceStats: store.traceStats,
 			getTrace,

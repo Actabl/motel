@@ -55,7 +55,7 @@ export const TraceDetailsPane = ({
 			: colors.passing
 
 	return (
-		<box flexDirection="column" height={bodyLines + 5}>
+		<box flexDirection="column" height={bodyLines + 7}>
 			<box paddingLeft={1} paddingRight={1}>
 				<AlignedHeaderLine left={detailHeaderTitle} right={detailHeaderRight} width={contentWidth} rightFg={detailHeaderColor} />
 			</box>

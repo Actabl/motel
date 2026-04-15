@@ -12,10 +12,12 @@ import {
 	detailViewAtom,
 	filterModeAtom,
 	filterTextAtom,
+	initialTraceDetailState,
 	traceSortAtom,
 	initialLogState,
 	initialServiceLogState,
-	loadRecentTraces,
+	loadRecentTraceSummaries,
+	loadTraceDetail,
 	loadServiceLogs,
 	loadTraceLogs,
 	loadTraceServices,
@@ -29,6 +31,7 @@ import {
 	selectedTraceServiceAtom,
 	serviceLogStateAtom,
 	showHelpAtom,
+	traceDetailStateAtom,
 	traceStateAtom,
 } from "./ui/state.ts"
 import { colors, DETAIL_DIVIDER_ROW, SEPARATOR } from "./ui/theme.ts"
@@ -40,6 +43,7 @@ import { useKeyboardNav } from "./ui/useKeyboardNav.ts"
 export const App = () => {
 	const { width, height } = useTerminalDimensions()
 	const [traceState, setTraceState] = useAtom(traceStateAtom)
+	const [traceDetailState, setTraceDetailState] = useAtom(traceDetailStateAtom)
 	const [logState, setLogState] = useAtom(logStateAtom)
 	const [serviceLogState, setServiceLogState] = useAtom(serviceLogStateAtom)
 	const [selectedServiceLogIndex, setSelectedServiceLogIndex] = useAtom(selectedServiceLogIndexAtom)
@@ -142,7 +146,7 @@ export const App = () => {
 					setSelectedTraceService(effectiveService)
 				}
 
-				const traces = effectiveService ? await loadRecentTraces(effectiveService) : []
+				const traces = effectiveService ? await loadRecentTraceSummaries(effectiveService) : []
 				if (cancelled) return
 
 				// Preserve selection by trace ID across refreshes
@@ -183,14 +187,63 @@ export const App = () => {
 		})
 	}, [traceState.data.length])
 
-	const selectedTrace = traceState.data[selectedTraceIndex] ?? null
-	selectedTraceRef.current = selectedTrace?.traceId ?? null
+	const selectedTraceSummary = traceState.data[selectedTraceIndex] ?? null
+	const selectedTraceId = selectedTraceSummary?.traceId ?? null
+	const selectedTrace = traceDetailState.traceId === selectedTraceId ? traceDetailState.data : null
+	selectedTraceRef.current = selectedTraceId
+
+	useEffect(() => {
+		if (!selectedTraceId) {
+			setTraceDetailState(initialTraceDetailState)
+			return
+		}
+
+		let cancelled = false
+
+		const load = async () => {
+			setTraceDetailState((current) => ({
+				status: current.traceId === selectedTraceId && current.fetchedAt !== null ? "ready" : "loading",
+				traceId: selectedTraceId,
+				data: current.traceId === selectedTraceId ? current.data : null,
+				error: null,
+				fetchedAt: current.traceId === selectedTraceId ? current.fetchedAt : null,
+			}))
+
+			try {
+				const trace = await loadTraceDetail(selectedTraceId)
+				if (cancelled) return
+
+				setTraceDetailState({
+					status: "ready",
+					traceId: selectedTraceId,
+					data: trace,
+					error: null,
+					fetchedAt: new Date(),
+				})
+			} catch (error) {
+				if (cancelled) return
+				setTraceDetailState({
+					status: "error",
+					traceId: selectedTraceId,
+					data: null,
+					error: error instanceof Error ? error.message : String(error),
+					fetchedAt: null,
+				})
+			}
+		}
+
+		void load()
+
+		return () => {
+			cancelled = true
+		}
+	}, [refreshNonce, selectedTraceId, setTraceDetailState])
 
 	// Reset collapsed spans and span selection when trace changes
 	useEffect(() => {
 		setCollapsedSpanIds(new Set())
 		setSelectedSpanIndex(null)
-	}, [selectedTrace?.traceId])
+	}, [selectedTraceId])
 
 	// Clamp span index against visible (filtered) span count
 	useEffect(() => {
@@ -219,7 +272,7 @@ export const App = () => {
 
 	// Load trace logs
 	useEffect(() => {
-		const traceId = selectedTrace?.traceId
+		const traceId = selectedTraceId
 		if (!traceId) {
 			setLogState(initialLogState)
 			return
@@ -264,7 +317,7 @@ export const App = () => {
 		return () => {
 			cancelled = true
 		}
-	}, [refreshNonce, selectedTrace?.traceId, setLogState])
+	}, [refreshNonce, selectedTraceId, setLogState])
 
 	// Load service logs
 	useEffect(() => {
@@ -383,7 +436,7 @@ export const App = () => {
 
 	const traceListProps = {
 		traces: filteredTraces,
-		selectedTraceId: selectedTrace?.traceId ?? null,
+		selectedTraceId,
 		status: traceState.status,
 		error: traceState.error,
 		contentWidth: leftContentWidth,

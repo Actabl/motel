@@ -1,7 +1,7 @@
 import { useAtom } from "@effect/atom-react"
 import { useKeyboard } from "@opentui/react"
 import { useEffect, useRef } from "react"
-import type { TraceItem } from "../domain.ts"
+import type { TraceItem, TraceSummaryItem } from "../domain.ts"
 import { otelServerInstructions } from "../instructions.ts"
 import { copyToClipboard, traceUiUrl } from "./format.ts"
 import {
@@ -26,7 +26,7 @@ import { findFirstChildIndex, findParentIndex, getVisibleSpans } from "./Waterfa
 
 interface KeyboardNavParams {
 	selectedTrace: TraceItem | null
-	filteredTraces: readonly TraceItem[]
+	filteredTraces: readonly TraceSummaryItem[]
 	isWideLayout: boolean
 	wideBodyLines: number
 	narrowBodyLines: number

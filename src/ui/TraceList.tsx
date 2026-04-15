@@ -1,5 +1,5 @@
 import { config } from "../config.ts"
-import type { TraceItem } from "../domain.ts"
+import type { TraceSummaryItem } from "../domain.ts"
 import { fitCell, formatDuration, relativeTime, traceIndicator, traceIndicatorColor, traceRowId } from "./format.ts"
 import { AlignedHeaderLine, PlainLine, TextLine } from "./primitives.tsx"
 import type { LoadStatus } from "./state.ts"
@@ -20,7 +20,7 @@ const TraceRow = ({
 	contentWidth,
 	onSelect,
 }: {
-	trace: TraceItem
+	trace: TraceSummaryItem
 	selected: boolean
 	contentWidth: number
 	onSelect: () => void
@@ -58,7 +58,7 @@ export const TraceList = ({
 	onSelectTrace,
 }: {
 	showHeader: boolean
-	traces: readonly TraceItem[]
+	traces: readonly TraceSummaryItem[]
 	selectedTraceId: string | null
 	status: LoadStatus
 	error: string | null
