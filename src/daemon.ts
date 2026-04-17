@@ -13,6 +13,18 @@ const START_TIMEOUT_MS = 15_000
 const STOP_TIMEOUT_MS = 10_000
 const LOCK_TIMEOUT_MS = 10_000
 const POLL_INTERVAL_MS = 150
+/** Fast probe used inside the waitForHealthy poll loop — we call it
+ *  every POLL_INTERVAL_MS, so a generous budget would stall the loop. */
+const HEALTH_FAST_TIMEOUT_MS = 750
+/** Patient probe used on critical paths: the first getStatus() call
+ *  in ensure(), and the final pre-throw check after a spawned child
+ *  dies. A real daemon with a busy SQLite writer (FTS backfill, big
+ *  DB) can easily take 1-2s to answer /api/health — if we declare
+ *  the port empty at 750ms we'll spawn a duplicate and collide with
+ *  EADDRINUSE. 3s is long enough to tolerate a slow healthy daemon
+ *  and short enough that a truly-down daemon is still detected
+ *  before START_TIMEOUT_MS fires. */
+const HEALTH_PATIENT_TIMEOUT_MS = 3_000
 
 type HealthShape = {
 	readonly ok: boolean
@@ -134,9 +146,9 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 	const config = resolveConfig(options)
 	const mapError = (error: unknown) => new DaemonError(error instanceof Error ? error.message : String(error))
 
-	const fetchHealth = async (): Promise<HealthShape | null> => {
+	const fetchHealth = async (timeoutMs: number = HEALTH_FAST_TIMEOUT_MS): Promise<HealthShape | null> => {
 		try {
-			const response = await fetch(`${config.baseUrl}/api/health`, { signal: AbortSignal.timeout(750) })
+			const response = await fetch(`${config.baseUrl}/api/health`, { signal: AbortSignal.timeout(timeoutMs) })
 			if (!response.ok) return null
 			return await response.json() as HealthShape
 		} catch {
@@ -218,6 +230,17 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 				throw new Error(mismatch)
 			}
 			if (!isAlive(pid)) {
+				// The spawned child is gone. Before declaring failure,
+				// do one patient probe: the child may have died from
+				// EADDRINUSE because another healthy motel is alive on
+				// the port but was answering /api/health too slowly for
+				// our fast poll. If that's the case, adopt it.
+				const patient = await fetchHealth(HEALTH_PATIENT_TIMEOUT_MS)
+				if (patient) {
+					const mismatch = describeManagedMismatch(patient)
+					if (!mismatch) return patient
+					throw new Error(mismatch)
+				}
 				throw new Error(`Daemon process ${pid} exited before becoming healthy. See ${config.logPath}.`)
 			}
 			await sleep(POLL_INTERVAL_MS)
@@ -244,9 +267,9 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 		throw new Error(`Timed out waiting for daemon ${pid} to stop.`)
 	}
 
-	const getStatus = async (): Promise<DaemonStatus> => {
+	const getStatus = async (timeoutMs: number = HEALTH_FAST_TIMEOUT_MS): Promise<DaemonStatus> => {
 		const registry = readRegistryEntry()
-		const health = await fetchHealth()
+		const health = await fetchHealth(timeoutMs)
 		if (!health) {
 			return {
 				running: false,
@@ -286,7 +309,11 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 	}
 
 	const ensure = async (): Promise<DaemonStatus> => {
-		const existing = await getStatus()
+		// Use the patient timeout for the initial probe — this is the
+		// critical "is there already a daemon here?" check. A false
+		// negative here drops us into the spawn path and collides with
+		// any slow-but-healthy daemon sitting on the port.
+		const existing = await getStatus(HEALTH_PATIENT_TIMEOUT_MS)
 		if (existing.managed && existing.running) return existing
 		if (existing.service !== null && existing.reason) {
 			throw new Error(existing.reason)
@@ -295,7 +322,11 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 		const lock = await acquireStartupLock()
 		let spawnedPid: number | null = null
 		try {
-			const rechecked = await getStatus()
+			// Same reasoning for the post-lock re-check: another ensure()
+			// may have spawned a daemon between our first probe and the
+			// lock grant, and its initial health response can be slow
+			// while the runtime warms up.
+			const rechecked = await getStatus(HEALTH_PATIENT_TIMEOUT_MS)
 			if (rechecked.managed && rechecked.running) return rechecked
 			if (rechecked.service !== null && rechecked.reason) {
 				throw new Error(rechecked.reason)
@@ -371,7 +402,10 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 		}),
 		getStatus: Effect.fn("DaemonManager.getStatus")(() =>
 			Effect.tryPromise({
-				try: getStatus,
+				// Wrapped so Effect.tryPromise only sees the no-arg call
+				// signature — the optional timeoutMs parameter is an
+				// internal detail used by ensure()'s critical probes.
+				try: () => getStatus(),
 				catch: mapError,
 			}),
 		)(),
