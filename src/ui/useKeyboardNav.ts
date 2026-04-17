@@ -350,6 +350,17 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 				setPickerIndex(0)
 				return
 			}
+			// Ctrl-C: clear input, or close the picker if already empty.
+			if (key.ctrl && key.name === "c") {
+				if (s.pickerInput.length > 0) {
+					setPickerInput("")
+					setPickerIndex(0)
+				} else {
+					setPickerMode("off")
+					setPickerIndex(0)
+				}
+				return
+			}
 			if (key.name === "up" || (key.ctrl && key.name === "p")) { move(-1); return }
 			if (key.name === "down" || (key.ctrl && key.name === "n")) { move(1); return }
 			if (key.name === "pageup") { move(-10); return }
@@ -407,6 +418,15 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			if (key.name === "escape") {
 				setFilterMode(false)
 				setFilterText("")
+				return
+			}
+			// Ctrl-C: clear the input, or exit filter mode if already empty.
+			if (key.ctrl && key.name === "c") {
+				if (s.filterText.length > 0) {
+					setFilterText("")
+				} else {
+					setFilterMode(false)
+				}
 				return
 			}
 			if (key.name === "return" || key.name === "enter") {
