@@ -1,4 +1,4 @@
-import { memo, useRef } from "react"
+import { memo, useLayoutEffect, useRef, useState } from "react"
 import type { LogItem, TraceItem, TraceSpanItem } from "../domain.ts"
 import { formatDuration, lifecycleLabel, splitDuration, truncateText } from "./format.ts"
 import { BlankRow, TextLine } from "./primitives.tsx"

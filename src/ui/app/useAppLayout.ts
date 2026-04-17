@@ -25,9 +25,22 @@ export const useAppLayout = ({ width, height, notice, detailView, selectedSpanIn
 		detailView === "span-detail" ? 2 :
 		selectedSpanIndex !== null ? 1 :
 		0
+	// At L0 we show list + preview side-by-side. Once drilled in (L1/L2) the
+	// trace list is hidden entirely and the detail pane(s) take the full
+	// width — either one pane (waterfall at L1) or a 50/50 split between
+	// waterfall and span detail at L2.
 	const splitRatio = viewLevelForLayout === 2 ? 0.5 : 0.4
-	const leftPaneWidth = isWideLayout ? Math.max(40, Math.floor((contentWidth - splitGap) * splitRatio)) : contentWidth
-	const rightPaneWidth = isWideLayout ? Math.max(28, contentWidth - leftPaneWidth - splitGap) : contentWidth
+	const listHidden = viewLevelForLayout >= 1
+	const leftPaneWidth = !isWideLayout
+		? contentWidth
+		: listHidden
+			? (viewLevelForLayout === 2 ? Math.max(40, Math.floor((contentWidth - splitGap) * splitRatio)) : contentWidth)
+			: Math.max(40, Math.floor((contentWidth - splitGap) * splitRatio))
+	const rightPaneWidth = !isWideLayout
+		? contentWidth
+		: listHidden && viewLevelForLayout !== 2
+			? 0
+			: Math.max(28, contentWidth - leftPaneWidth - splitGap)
 	// Left pane: paddingLeft (1) + scrollbar column (1). No right padding —
 	// the vertical pane divider handles visual separation from the right pane.
 	const leftContentWidth = isWideLayout ? Math.max(24, leftPaneWidth - 2) : Math.max(24, contentWidth - sectionPadding * 2)
@@ -61,6 +74,7 @@ export const useAppLayout = ({ width, height, notice, detailView, selectedSpanIn
 		sectionPadding,
 		availableContentHeight,
 		viewLevel: viewLevelForLayout,
+		listHidden,
 		footerNotice,
 		footerHeight,
 		leftPaneWidth,

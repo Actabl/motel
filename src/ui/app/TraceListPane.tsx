@@ -1,7 +1,5 @@
-import type { ScrollBoxRenderable } from "@opentui/core"
-import type { RefObject } from "react"
 import { FilterBar } from "../primitives.tsx"
-import { TraceList, type TraceListProps } from "../TraceList.tsx"
+import { TraceListBody, TraceListHeader, type TraceListProps } from "../TraceList.tsx"
 
 interface TraceListPaneProps {
 	readonly traceListProps: TraceListProps
@@ -11,9 +9,16 @@ interface TraceListPaneProps {
 	readonly containerHeight: number
 	readonly bodyHeight: number
 	readonly padding: number
-	readonly scrollRef: RefObject<ScrollBoxRenderable | null>
 }
 
+/**
+ * Replaced the opentui <scrollbox> with a direct virtual-windowed body.
+ * Rationale: the scrollbox's scrollSize is updated during opentui's render
+ * pass, not during React commit, so the useLayoutEffect that adjusted
+ * scrollTop on refresh was reading a stale max and clamping our intended
+ * scroll position. Rendering only the visible rows ourselves keeps the
+ * viewport math entirely in React state and eliminates the race.
+ */
 export const TraceListPane = ({
 	traceListProps,
 	filterMode,
@@ -22,22 +27,13 @@ export const TraceListPane = ({
 	containerHeight,
 	bodyHeight,
 	padding,
-	scrollRef,
-}: TraceListPaneProps) => (
-	// paddingRight=0 on purpose — the vertical pane divider on the right
-	// already separates this from the trace details pane, and the scrollbar
-	// lives inside the scrollbox, so a trailing padding column would just
-	// be wasted space. useAppLayout.leftContentWidth is sized to match.
-	<box height={containerHeight} flexDirection="column" paddingLeft={padding} paddingRight={0}>
-		<TraceList showHeader {...traceListProps} />
-		{filterMode ? <FilterBar text={filterText} width={filterWidth} /> : null}
-		<scrollbox
-			ref={scrollRef}
-			height={filterMode ? bodyHeight - 1 : bodyHeight}
-			flexGrow={0}
-			verticalScrollbarOptions={{ visible: false }}
-		>
-			<TraceList showHeader={false} {...traceListProps} />
-		</scrollbox>
-	</box>
-)
+}: TraceListPaneProps) => {
+	const bodyRows = Math.max(1, filterMode ? bodyHeight - 1 : bodyHeight)
+	return (
+		<box height={containerHeight} flexDirection="column" paddingLeft={padding} paddingRight={0}>
+			<TraceListHeader {...traceListProps} />
+			{filterMode ? <FilterBar text={filterText} width={filterWidth} /> : null}
+			<TraceListBody {...traceListProps} viewportRows={bodyRows} />
+		</box>
+	)
+}

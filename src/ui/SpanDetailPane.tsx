@@ -30,8 +30,7 @@ export const SpanDetailPane = ({
 	paneWidth: number
 	focused?: boolean
 }) => {
-	const focusIndicator = focused ? "\u25b8 " : ""
-	const headerTitle = `${focusIndicator}SPAN`
+	const headerTitle = "SPAN"
 	const headerRight = span
 		? `${span.status} \u00b7 ${formatDuration(span.durationMs)}${logs.length > 0 ? ` \u00b7 ${logs.length} lg` : ""}`
 		: "no span selected"

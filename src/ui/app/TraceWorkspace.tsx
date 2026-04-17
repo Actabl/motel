@@ -1,5 +1,3 @@
-import type { ScrollBoxRenderable } from "@opentui/core"
-import type { RefObject } from "react"
 import type { LogItem, TraceItem, TraceSummaryItem } from "../../domain.ts"
 import { formatShortDate, formatTimestamp } from "../format.ts"
 import { AlignedHeaderLine, BlankRow, Divider, SeparatorColumn, TextLine } from "../primitives.tsx"
@@ -21,7 +19,6 @@ interface TraceWorkspaceProps {
 	readonly filterMode: boolean
 	readonly filterText: string
 	readonly traceListProps: TraceListProps
-	readonly traceListScrollRef: RefObject<ScrollBoxRenderable | null>
 	readonly selectedTraceService: string | null
 	readonly serviceLogState: ServiceLogState
 	readonly selectedServiceLogIndex: number
@@ -44,7 +41,6 @@ export const TraceWorkspace = ({
 	filterMode,
 	filterText,
 	traceListProps,
-	traceListScrollRef,
 	selectedTraceService,
 	serviceLogState,
 	selectedServiceLogIndex,
@@ -107,10 +103,11 @@ export const TraceWorkspace = ({
 	}
 
 	if (isWideLayout) {
-		return (
-			<box flexGrow={1} flexDirection="row">
-				<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column">
-					{viewLevel <= 1 ? (
+		// L0: list (left) + trace preview (right). The two-pane zoom.
+		if (viewLevel === 0) {
+			return (
+				<box flexGrow={1} flexDirection="row">
+					<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column">
 						<TraceListPane
 							traceListProps={traceListProps}
 							filterMode={filterMode}
@@ -119,53 +116,86 @@ export const TraceWorkspace = ({
 							containerHeight={wideBodyHeight}
 							bodyHeight={wideTraceListBodyHeight}
 							padding={sectionPadding}
-							scrollRef={traceListScrollRef}
 						/>
-					) : (
+					</box>
+					<SeparatorColumn height={wideBodyHeight} junctionChars={separatorJunctionChars} />
+					<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
 						<TraceDetailsPane
 							trace={selectedTrace}
 							traceSummary={selectedTraceSummary}
 							traceStatus={traceDetailState.status}
 							traceError={traceDetailState.error}
 							traceLogsState={logState}
-							contentWidth={leftContentWidth}
+							contentWidth={rightContentWidth}
 							bodyLines={wideBodyLines}
-							paneWidth={leftPaneWidth}
+							paneWidth={rightPaneWidth}
 							selectedSpanIndex={selectedSpanIndex}
 							collapsedSpanIds={collapsedSpanIds}
 							focused={false}
 							onSelectSpan={selectSpan}
 						/>
-					)}
+					</box>
 				</box>
-				<SeparatorColumn height={wideBodyHeight} junctionChars={viewLevel === 2 ? separatorCrossChars : separatorJunctionChars} />
-				<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
-					{viewLevel <= 1 ? (
+			)
+		}
+
+		// L1: the user pressed enter on a trace — hide the list entirely and
+		// let the waterfall take the full width. `leftPaneWidth` is already
+		// `contentWidth` in this case (see useAppLayout), so one pane fills
+		// the row.
+		if (viewLevel === 1) {
+			return (
+				<box flexGrow={1} flexDirection="row">
+					<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column">
 						<TraceDetailsPane
 							trace={selectedTrace}
 							traceSummary={selectedTraceSummary}
 							traceStatus={traceDetailState.status}
 							traceError={traceDetailState.error}
 							traceLogsState={logState}
-							contentWidth={rightContentWidth}
+							contentWidth={Math.max(24, leftPaneWidth - sectionPadding * 2)}
 							bodyLines={wideBodyLines}
-							paneWidth={rightPaneWidth}
+							paneWidth={leftPaneWidth}
 							selectedSpanIndex={selectedSpanIndex}
 							collapsedSpanIds={collapsedSpanIds}
-							focused={viewLevel === 1}
+							focused={true}
 							onSelectSpan={selectSpan}
 						/>
-					) : (
-						<SpanDetailPane
-							span={selectedSpan}
-							trace={selectedTrace}
-							logs={selectedSpanLogs}
-							contentWidth={rightContentWidth}
-							bodyLines={wideBodyLines}
-							paneWidth={rightPaneWidth}
-							focused={true}
-						/>
-					)}
+					</box>
+				</box>
+			)
+		}
+
+		// L2: waterfall-left + span detail-right. Still no list.
+		return (
+			<box flexGrow={1} flexDirection="row">
+				<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column">
+					<TraceDetailsPane
+						trace={selectedTrace}
+						traceSummary={selectedTraceSummary}
+						traceStatus={traceDetailState.status}
+						traceError={traceDetailState.error}
+						traceLogsState={logState}
+						contentWidth={leftContentWidth}
+						bodyLines={wideBodyLines}
+						paneWidth={leftPaneWidth}
+						selectedSpanIndex={selectedSpanIndex}
+						collapsedSpanIds={collapsedSpanIds}
+						focused={false}
+						onSelectSpan={selectSpan}
+					/>
+				</box>
+				<SeparatorColumn height={wideBodyHeight} junctionChars={separatorCrossChars} />
+				<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
+					<SpanDetailPane
+						span={selectedSpan}
+						trace={selectedTrace}
+						logs={selectedSpanLogs}
+						contentWidth={rightContentWidth}
+						bodyLines={wideBodyLines}
+						paneWidth={rightPaneWidth}
+						focused={true}
+					/>
 				</box>
 			</box>
 		)
@@ -182,7 +212,6 @@ export const TraceWorkspace = ({
 					containerHeight={narrowListHeight}
 					bodyHeight={narrowTraceListBodyHeight}
 					padding={sectionPadding}
-					scrollRef={traceListScrollRef}
 				/>
 				<Divider width={contentWidth} />
 				<TraceDetailsPane

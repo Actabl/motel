@@ -67,8 +67,7 @@ export const TraceDetailsPane = ({
 	const hasTraceSelection = traceSummary !== null
 	const isLoadingTrace = hasTraceSelection && trace === null && traceStatus !== "error"
 
-	const focusIndicator = focused ? "\u25b8 " : ""
-	const headerTitle = `${focusIndicator}TRACE DETAILS`
+	const headerTitle = "TRACE DETAILS"
 	const headerRight = traceMeta
 		? `${traceMeta.errorCount > 0 ? `${traceMeta.errorCount} errors` : traceMeta.isRunning ? "running" : isLoadingTrace ? "loading" : "healthy"} \u00b7 ${formatDuration(traceMeta.durationMs)}${traceLogCount > 0 ? ` \u00b7 ${traceLogCount} logs` : ""}`
 		: traceStatus === "error"
@@ -108,6 +107,8 @@ export const TraceDetailsPane = ({
 									<span fg={colors.error}>{warningCount} warning{warningCount === 1 ? "" : "s"}</span>
 								</>
 							) : null}
+							<span fg={colors.separator}>{SEPARATOR}</span>
+							<span fg={colors.muted}>{trace.traceId}</span>
 						</TextLine>
 					</box>
 					<Divider width={paneWidth} />
@@ -137,6 +138,8 @@ export const TraceDetailsPane = ({
 							<span fg={colors.count}>{traceMeta.spanCount} spans</span>
 							<span fg={colors.separator}>{SEPARATOR}</span>
 							<span fg={colors.count}>warming adjacent trace...</span>
+							<span fg={colors.separator}>{SEPARATOR}</span>
+							<span fg={colors.muted}>{traceMeta.traceId}</span>
 						</TextLine>
 					</box>
 					<Divider width={paneWidth} />
