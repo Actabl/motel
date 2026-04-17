@@ -32,11 +32,15 @@ export const useAppLayout = ({ width, height, notice, detailView, selectedSpanIn
 	const rightContentWidth = isWideLayout ? Math.max(24, rightPaneWidth - sectionPadding * 2) : Math.max(24, contentWidth - sectionPadding * 2)
 	const headerFooterWidth = Math.max(24, contentWidth - 2)
 	const wideBodyHeight = availableContentHeight
-	const wideBodyLines = Math.max(8, wideBodyHeight - 5)
+	// TraceDetailsPane + SpanDetailPane both reserve 4 rows for their header
+	// (title, op line, meta line, divider), so `bodyLines = paneHeight - 4`
+	// makes the pane fill its parent exactly. Using `-5` here left a visible
+	// blank row between the last waterfall span and the bottom divider.
+	const wideBodyLines = Math.max(8, wideBodyHeight - 4)
 	const narrowSplitHeight = Math.max(10, availableContentHeight - 1)
 	const narrowListHeight = Math.max(4, Math.min(10, Math.floor(narrowSplitHeight * 0.4), narrowSplitHeight - 9))
 	const narrowDetailHeight = narrowSplitHeight - narrowListHeight
-	const narrowBodyLines = Math.max(2, narrowDetailHeight - 5)
+	const narrowBodyLines = Math.max(2, narrowDetailHeight - 4)
 	const narrowFullBodyLines = Math.max(8, availableContentHeight - 6)
 	const wideTraceListBodyHeight = Math.max(1, wideBodyHeight - traceListHeaderHeight)
 	const narrowTraceListBodyHeight = Math.max(1, narrowListHeight - traceListHeaderHeight)
