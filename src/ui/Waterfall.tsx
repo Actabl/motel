@@ -1,6 +1,6 @@
 import { memo, useRef } from "react"
 import type { LogItem, TraceItem, TraceSpanItem } from "../domain.ts"
-import { formatDuration, lifecycleLabel, truncateText } from "./format.ts"
+import { formatDuration, lifecycleLabel, splitDuration, truncateText } from "./format.ts"
 import { BlankRow, TextLine } from "./primitives.tsx"
 import { colors, waterfallColors } from "./theme.ts"
 
@@ -92,12 +92,17 @@ const renderWaterfallBar = (
 	barWidth: number,
 	barColor: string,
 	laneColor: string,
-): { readonly segments: readonly WaterfallBarSegment[]; readonly afterCells: number } => {
+	rowBg: string,
+): { readonly segments: readonly WaterfallBarSegment[] } => {
+	// Timeline semantics: the leading gap (before the bar starts) is the
+	// "runway" showing how long after trace start this span kicked in — render
+	// it in the lane color. The trailing gap (after the bar ends) is post-span
+	// dead time — render it in the row bg so it visually disappears.
 	if (barWidth < 3 || trace.durationMs === 0) {
-		return {
-			segments: [{ text: "\u2588", fg: barColor }],
-			afterCells: Math.max(0, barWidth - 1),
-		}
+		const trailing = Math.max(0, barWidth - 1)
+		const segs: WaterfallBarSegment[] = [{ text: "\u2588", fg: barColor }]
+		if (trailing > 0) segs.push({ text: " ".repeat(trailing), fg: rowBg, bg: rowBg })
+		return { segments: segs }
 	}
 
 	const traceStart = trace.startedAt.getTime()
@@ -114,33 +119,40 @@ const renderWaterfallBar = (
 	const endOffset = endUnits % 8
 	const segments: WaterfallBarSegment[] = []
 
-	if (startCell > 0) {
-		segments.push({ text: " ".repeat(startCell), fg: laneColor, bg: laneColor })
+	const pushLeading = (cells: number) => {
+		if (cells > 0) segments.push({ text: " ".repeat(cells), fg: laneColor, bg: laneColor })
 	}
+	const pushTrailing = (cells: number) => {
+		if (cells > 0) segments.push({ text: " ".repeat(cells), fg: rowBg, bg: rowBg })
+	}
+
+	pushLeading(startCell)
 
 	if (startCell === endCell) {
 		const singleCellUnits = Math.max(1, endUnits - startUnits)
 		if (singleCellUnits <= 4) {
 			const centeredMarker = ULTRA_SHORT_MARKERS[Math.max(0, singleCellUnits - 1)] ?? "\u258f"
-			segments.push({ text: centeredMarker, fg: barColor })
-			return {
-				segments,
-				afterCells: Math.max(0, barWidth - startCell - 1),
-			}
+			// The marker is a left-aligned sliver — the rest of the cell is
+			// post-bar space, so it uses the row bg (transparent) rather than
+			// carrying the dark lane track past where the span ended.
+			segments.push({ text: centeredMarker, fg: barColor, bg: rowBg })
+			pushTrailing(Math.max(0, barWidth - startCell - 1))
+			return { segments }
 		}
 
 		if (startOffset === 0) {
-			segments.push({ text: PARTIAL_BLOCKS[singleCellUnits], fg: barColor })
+			// Bar fills from the left of the cell; post-bar pixels fall to row bg.
+			segments.push({ text: PARTIAL_BLOCKS[singleCellUnits], fg: barColor, bg: rowBg })
 		} else {
+			// Bar starts partway into the cell; left pixels are lane, right is bar.
 			segments.push({ text: PARTIAL_BLOCKS[startOffset], fg: laneColor, bg: barColor })
 		}
-		return {
-			segments,
-			afterCells: Math.max(0, barWidth - startCell - 1),
-		}
+		pushTrailing(Math.max(0, barWidth - startCell - 1))
+		return { segments }
 	}
 
 	if (startOffset > 0) {
+		// Leading partial: left portion is lane (runway), right is bar.
 		segments.push({ text: PARTIAL_BLOCKS[startOffset], fg: laneColor, bg: barColor })
 	}
 
@@ -152,13 +164,12 @@ const renderWaterfallBar = (
 	}
 
 	if (endOffset > 0) {
-		segments.push({ text: PARTIAL_BLOCKS[endOffset], fg: barColor })
+		// Trailing partial: left portion is bar, right is row bg (transparent).
+		segments.push({ text: PARTIAL_BLOCKS[endOffset], fg: barColor, bg: rowBg })
 	}
 
-	return {
-		segments,
-		afterCells: Math.max(0, barWidth - endCell - 1),
-	}
+	pushTrailing(Math.max(0, barWidth - endCell - 1))
+	return { segments }
 }
 
 const durationColor = (durationMs: number) => {
@@ -169,20 +180,53 @@ const durationColor = (durationMs: number) => {
 	return colors.muted
 }
 
-export const getWaterfallLayout = (contentWidth: number, traceDurationMs: number) => {
+export const getWaterfallLayout = (contentWidth: number, suffixWidth: number) => {
 	const labelMaxWidth = Math.min(Math.floor(contentWidth * 0.4), 32)
-	const durationWidth = Math.max(8, formatDuration(traceDurationMs).length + 1)
-	const logWidth = 5
-	const barWidth = Math.max(6, contentWidth - labelMaxWidth - durationWidth - logWidth - 2)
-	return { labelMaxWidth, durationWidth, logWidth, barWidth } as const
+	// Two single-space gaps: one between label and bar, one between bar and suffix.
+	const barWidth = Math.max(6, contentWidth - labelMaxWidth - suffixWidth - 2)
+	return { labelMaxWidth, barWidth } as const
 }
 
-export const getWaterfallColumns = (contentWidth: number, traceDurationMs: number, durationMs: number, logCount: number) => {
-	const { labelMaxWidth, durationWidth, logWidth, barWidth } = getWaterfallLayout(contentWidth, traceDurationMs)
-	const durationCell = formatDuration(Math.max(0, durationMs)).padStart(durationWidth)
-	const logText = logCount > 0 ? `${logCount}lg` : ""
-	const logCell = logText.padStart(logWidth)
-	return { labelMaxWidth, durationWidth, logWidth, barWidth, durationCell, logCell } as const
+export type WaterfallSuffixMetrics = {
+	readonly maxDurationWidth: number
+	readonly anyLogVisible: boolean
+	readonly maxLogWidth: number
+	readonly suffixWidth: number
+}
+
+/**
+ * Compute a shared suffix (duration + optional log) width from whichever
+ * spans are currently visible. Reserving the width once here keeps every
+ * row right-aligned on the same column regardless of per-row content.
+ */
+export const getWaterfallSuffixMetrics = (
+	spans: readonly { readonly durationMs: number; readonly spanId: string }[],
+	spanLogCounts: ReadonlyMap<string, number>,
+): WaterfallSuffixMetrics => {
+	let maxDurationWidth = 0
+	let anyLogVisible = false
+	let maxLogWidth = 0
+	for (const span of spans) {
+		const d = formatDuration(Math.max(0, span.durationMs)).length
+		if (d > maxDurationWidth) maxDurationWidth = d
+		const logCount = spanLogCounts.get(span.spanId) ?? 0
+		if (logCount > 0) {
+			anyLogVisible = true
+			const l = `${logCount}lg`.length
+			if (l > maxLogWidth) maxLogWidth = l
+		}
+	}
+	const suffixWidth = maxDurationWidth + (anyLogVisible ? 1 + maxLogWidth : 0)
+	return { maxDurationWidth, anyLogVisible, maxLogWidth, suffixWidth }
+}
+
+// Retained for tests: per-row view of the shared layout.
+export const getWaterfallColumns = (
+	contentWidth: number,
+	metrics: WaterfallSuffixMetrics,
+) => {
+	const { labelMaxWidth, barWidth } = getWaterfallLayout(contentWidth, metrics.suffixWidth)
+	return { labelMaxWidth, barWidth, suffixWidth: metrics.suffixWidth } as const
 }
 
 export const spanPreviewEntries = (span: TraceSpanItem, logs: readonly LogItem[], maxEntries: number): Array<{ key: string; value: string; isWarning?: boolean }> => {
@@ -218,6 +262,7 @@ const WaterfallRow = memo(({
 	selected,
 	collapsed,
 	hasChildSpans,
+	suffixMetrics,
 	onSelect,
 }: {
 	span: TraceSpanItem
@@ -229,6 +274,7 @@ const WaterfallRow = memo(({
 	selected: boolean
 	collapsed: boolean
 	hasChildSpans: boolean
+	suffixMetrics: WaterfallSuffixMetrics
 	onSelect: () => void
 }) => {
 	const prefix = buildTreePrefix(spans, index)
@@ -236,7 +282,7 @@ const WaterfallRow = memo(({
 	const indicator = span.status === "error" ? "!" : hasChildSpans ? (collapsed ? "\u25b8" : "\u25be") : "\u00b7"
 	const opName = span.isRunning ? `${span.operationName} [${lifecycleLabel(span)}]` : span.operationName
 
-	const { labelMaxWidth, barWidth, durationCell, logCell } = getWaterfallColumns(contentWidth, trace.durationMs, span.durationMs, logCount)
+	const { labelMaxWidth, barWidth } = getWaterfallLayout(contentWidth, suffixMetrics.suffixWidth)
 
 	const opMaxWidth = Math.max(4, labelMaxWidth - prefix.length - 2)
 	const opTruncated = opName.length > opMaxWidth ? `${opName.slice(0, opMaxWidth - 1)}\u2026` : opName
@@ -246,14 +292,27 @@ const WaterfallRow = memo(({
 	const isError = span.status === "error"
 	const barColor = selected ? (isError ? waterfallColors.barSelectedError : waterfallColors.barSelected) : isError ? waterfallColors.barError : waterfallColors.bar
 	const laneColor = selected ? waterfallColors.barLane : waterfallColors.barBg
-	const { segments } = renderWaterfallBar(span, trace, barWidth, barColor, laneColor)
+	const rowBg = selected ? colors.selectedBg : colors.screenBg
+	const { segments } = renderWaterfallBar(span, trace, barWidth, barColor, laneColor, rowBg)
 	const bg = selected ? colors.selectedBg : undefined
 	const treeColor = selected ? colors.separator : colors.treeLine
 	const indicatorColor = isError ? colors.error : hasChildSpans ? (selected ? colors.selectedText : colors.muted) : colors.passing
 	const opColor = selected ? colors.selectedText : span.isRunning ? colors.warning : colors.text
 
 	const durationFg = durationColor(span.durationMs)
-	const logFg = logCount > 0 ? colors.defaultService : colors.muted
+	const unitFg = colors.muted
+	const logFg = colors.defaultService
+
+	// Split the duration so the unit (s/ms) renders dimmer than the number.
+	// Pad on the LEFT of the number so the unit stays glued to the number
+	// while the whole duration cell stays right-aligned across rows.
+	const { number: durNumber, unit: durUnit } = splitDuration(Math.max(0, span.durationMs))
+	const durationCell = `${durNumber}${durUnit}`
+	const durationPad = " ".repeat(Math.max(0, suffixMetrics.maxDurationWidth - durationCell.length))
+	const logText = logCount > 0 ? `${logCount}lg`.padStart(suffixMetrics.maxLogWidth) : ""
+	// Reserve the log column on every row when any visible row has logs, so
+	// the whole suffix group stays aligned on the right edge of the pane.
+	const logSlot = suffixMetrics.anyLogVisible ? " ".repeat(suffixMetrics.maxLogWidth + 1) : ""
 
 	return (
 		<box height={1} onMouseDown={onSelect}>
@@ -267,8 +326,14 @@ const WaterfallRow = memo(({
 					<span key={`${span.spanId}-bar-${index}`} fg={segment.fg} bg={segment.bg}>{segment.text}</span>
 				))}
 				<span> </span>
-				<span fg={durationFg}>{durationCell}</span>
-				<span fg={logFg}>{logCell}</span>
+				<span>{durationPad}</span>
+				<span fg={durationFg}>{durNumber}</span>
+				<span fg={unitFg}>{durUnit}</span>
+				{suffixMetrics.anyLogVisible ? (
+					logText.length > 0
+						? <><span> </span><span fg={logFg}>{logText}</span></>
+						: <span>{logSlot}</span>
+				) : null}
 			</TextLine>
 		</box>
 	)
@@ -347,8 +412,6 @@ export const WaterfallTimeline = ({
 }) => {
 	const selectedSpan = selectedSpanIndex !== null ? filteredSpans[selectedSpanIndex] ?? null : null
 
-	const { labelMaxWidth, durationWidth, barWidth } = getWaterfallLayout(contentWidth, trace.durationMs)
-
 	const spanIndexById = new Map<string, number>()
 	for (let i = 0; i < trace.spans.length; i++) {
 		spanIndexById.set(trace.spans[i].spanId, i)
@@ -380,6 +443,10 @@ export const WaterfallTimeline = ({
 	const windowSpans = filteredSpans.slice(windowStart, windowStart + viewportSize)
 	const blankCount = Math.max(0, viewportSize - windowSpans.length)
 
+	// One shared suffix width, measured from the current viewport. Every row
+	// uses this so the duration column (and the optional log column) line up.
+	const suffixMetrics = getWaterfallSuffixMetrics(windowSpans, spanLogCounts)
+
 	return (
 		<box flexDirection="column">
 			{windowSpans.map((span, index) => {
@@ -397,6 +464,7 @@ export const WaterfallTimeline = ({
 						selected={selectedSpanIndex === actualIndex}
 						collapsed={collapsedSpanIds.has(span.spanId)}
 						hasChildSpans={fullIndex >= 0 && findFirstChildIndex(trace.spans, fullIndex) !== null}
+						suffixMetrics={suffixMetrics}
 						onSelect={() => onSelectSpan(actualIndex)}
 					/>
 				)

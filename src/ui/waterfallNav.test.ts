@@ -3,7 +3,8 @@ import type { TraceSpanItem } from "../domain.ts"
 import {
 	findFirstChildIndex,
 	findParentIndex,
-	getWaterfallColumns,
+	getWaterfallLayout,
+	getWaterfallSuffixMetrics,
 	getVisibleSpans,
 } from "./Waterfall.tsx"
 import { resolveCollapseStep } from "./waterfallNav.ts"
@@ -130,13 +131,43 @@ describe("getVisibleSpans", () => {
 	})
 })
 
-describe("getWaterfallColumns", () => {
-	it("pads duration and log columns to fill the reserved width", () => {
+describe("getWaterfallSuffixMetrics", () => {
+	it("reserves no log column when no visible span has logs", () => {
+		const spans = [
+			{ spanId: "a", durationMs: 1 },
+			{ spanId: "b", durationMs: 57_000 },
+		]
+		const metrics = getWaterfallSuffixMetrics(spans, new Map())
+		expect(metrics.anyLogVisible).toBe(false)
+		expect(metrics.maxLogWidth).toBe(0)
+		// `57s` = 3, `1ms` = 3 → max 3
+		expect(metrics.maxDurationWidth).toBe(3)
+		expect(metrics.suffixWidth).toBe(3)
+	})
+
+	it("reserves the log column on every row once any visible row has logs", () => {
+		const spans = [
+			{ spanId: "a", durationMs: 1 },
+			{ spanId: "b", durationMs: 57_000 },
+			{ spanId: "c", durationMs: 120 },
+		]
+		const logCounts = new Map([["b", 12]])
+		const metrics = getWaterfallSuffixMetrics(spans, logCounts)
+		expect(metrics.anyLogVisible).toBe(true)
+		expect(metrics.maxLogWidth).toBe(4) // "12lg"
+		expect(metrics.maxDurationWidth).toBe(5) // "120ms"
+		expect(metrics.suffixWidth).toBe(5 + 1 + 4)
+	})
+
+	it("layout reserves the suffix once and leaves the rest for the bar", () => {
 		const contentWidth = 72
-		const columns = getWaterfallColumns(contentWidth, 153_000, 1, 0)
-		expect(columns.durationCell.length).toBe(columns.durationWidth)
-		expect(columns.logCell.length).toBe(columns.logWidth)
-		expect(columns.labelMaxWidth + 1 + columns.barWidth + 1 + columns.durationCell.length + columns.logCell.length).toBe(contentWidth)
+		const metrics = getWaterfallSuffixMetrics(
+			[{ spanId: "a", durationMs: 57_000 }, { spanId: "b", durationMs: 1 }],
+			new Map([["a", 4]]),
+		)
+		const { labelMaxWidth, barWidth } = getWaterfallLayout(contentWidth, metrics.suffixWidth)
+		// label + 1 (gap before bar) + bar + 1 (gap before suffix) + suffix = contentWidth
+		expect(labelMaxWidth + 1 + barWidth + 1 + metrics.suffixWidth).toBe(contentWidth)
 	})
 })
 

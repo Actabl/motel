@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core"
 import { memo } from "react"
 import { config } from "../config.ts"
 import type { TraceSummaryItem } from "../domain.ts"
-import { fitCell, formatDuration, lifecycleLabel, relativeTime, traceIndicator, traceIndicatorColor, traceRowId } from "./format.ts"
+import { fitCell, formatDuration, lifecycleLabel, relativeTime, splitDuration, traceIndicator, traceIndicatorColor, traceRowId } from "./format.ts"
 import { PlainLine, TextLine } from "./primitives.tsx"
 import type { LoadStatus } from "./state.ts"
 import { colors } from "./theme.ts"
@@ -40,13 +40,24 @@ const TraceRow = ({
 		: trace.rootOperationName
 	const titleColor = selected ? colors.selectedText : trace.isRunning ? colors.warning : colors.text
 
+	// Always surface a duration, including `0ms` for sub-millisecond traces —
+	// a visible duration is easier to scan than a blank column. The unit is
+	// rendered in a dimmer color so `123ms` visually reads as `123 ms`.
+	const { number: durNumber, unit: durUnit } = splitDuration(Math.max(0, trace.durationMs))
+	const durationText = `${durNumber}${durUnit}`
+	const durationPad = " ".repeat(Math.max(0, durationWidth - durationText.length))
+	const durationFg = selected ? colors.accent : colors.count
+	const unitFg = selected ? colors.count : colors.muted
+
 	return (
 		<box id={traceRowId(trace.traceId)} height={1} onMouseDown={onSelect}>
 			<TextLine fg={selected ? colors.selectedText : colors.text} bg={selected ? colors.selectedBg : undefined}>
 				<span fg={traceIndicatorColor(trace)}>{fitCell(traceIndicator(trace), stateWidth)}</span>
 				<span> </span>
 				<span fg={titleColor}>{fitTraceTitle(title, titleWidth)}</span>
-				<span fg={selected ? colors.accent : colors.count}>{fitCell(trace.durationMs >= 1 ? formatDuration(trace.durationMs) : "", durationWidth, "right")}</span>
+				<span>{durationPad}</span>
+				<span fg={durationFg}>{durNumber}</span>
+				<span fg={unitFg}>{durUnit}</span>
 				<span> </span>
 				<span fg={colors.muted}>{fitCell(`${trace.spanCount}sp`, countWidth, "right")}</span>
 				<span> </span>
