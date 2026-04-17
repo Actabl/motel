@@ -263,9 +263,6 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		if (key.name === "q" || (key.ctrl && key.name === "c")) {
 			if (quittingRef.current) return
 			quittingRef.current = true
-			renderer.once("destroy", () => {
-				process.exit(0)
-			})
 			renderer.destroy()
 			return
 		}

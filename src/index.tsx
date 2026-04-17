@@ -11,6 +11,7 @@ const renderer = await createCliRenderer({
 	screenMode: "alternate-screen",
 	onDestroy: () => {
 		stopLocalServer()
+		process.exit(0)
 	},
 })
 
