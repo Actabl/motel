@@ -106,6 +106,13 @@ export const autoRefreshAtom = Atom.make(false).pipe(Atom.keepAlive)
 export const filterModeAtom = Atom.make(false).pipe(Atom.keepAlive)
 export const filterTextAtom = Atom.make("").pipe(Atom.keepAlive)
 
+// Waterfall-scoped filter: the `/` key while drilled into a trace
+// (viewLevel >= 1) opens this filter instead of the trace-list one.
+// Purely client-side — dims spans whose operation name and attribute
+// values don't contain the needle.
+export const waterfallFilterModeAtom = Atom.make(false).pipe(Atom.keepAlive)
+export const waterfallFilterTextAtom = Atom.make("").pipe(Atom.keepAlive)
+
 // Attribute filter (F key): pick a span-attribute key + exact value to restrict the trace list.
 export type AttrPickerMode = "off" | "keys" | "values"
 export const attrPickerModeAtom = Atom.make<AttrPickerMode>("off").pipe(Atom.keepAlive)
@@ -158,8 +165,31 @@ export const collapsedSpanIdsAtom = Atom.make(new Set<string>() as ReadonlySet<s
 
 export const loadTraceServices = () => queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listServices))
 export const loadRecentTraceSummaries = (serviceName: string) => queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listTraceSummaries(serviceName)))
-export const loadFilteredTraceSummaries = (serviceName: string, attributeFilters: Readonly<Record<string, string>>) =>
-	queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.searchTraceSummaries({ serviceName, attributeFilters, limit: config.otel.traceFetchLimit })))
+/**
+ * Server-side trace summary search. Accepts any combination of:
+ *
+ * - `attributeFilters` — exact-match span attributes (from the `f` picker)
+ * - `aiText`           — FTS5-backed search across LLM prompt/response
+ *                        content (AI_FTS_KEYS), from the `:ai <query>`
+ *                        modifier in the `/` filter
+ *
+ * Both filters compose: when both are set, a trace must match both. When
+ * neither is set, callers should prefer `loadRecentTraceSummaries` so
+ * the server can skip the search path entirely.
+ */
+export const loadFilteredTraceSummaries = (
+	serviceName: string,
+	options: {
+		readonly attributeFilters?: Readonly<Record<string, string>>
+		readonly aiText?: string | null
+	},
+) =>
+	queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.searchTraceSummaries({
+		serviceName,
+		attributeFilters: options.attributeFilters,
+		aiText: options.aiText ?? null,
+		limit: config.otel.traceFetchLimit,
+	})))
 export const loadTraceAttributeKeys = (serviceName: string) =>
 	queryRuntime.runPromise(Effect.flatMap(TraceQueryService.asEffect(), (service) => service.listFacets({ type: "traces", field: "attribute_keys", serviceName, limit: 200 })))
 export const loadTraceAttributeValues = (serviceName: string, key: string) =>

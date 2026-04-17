@@ -4,7 +4,7 @@ import { dirname } from "node:path"
 import { Clock, Effect, Layer, Schedule, Context } from "effect"
 import { config } from "../config.js"
 import type { AiCallDetail, AiCallSummary, FacetItem, LogItem, SpanItem, StatsItem, TraceItem, TraceSummaryItem, TraceSpanEvent, TraceSpanItem } from "../domain.js"
-import { AI_ATTR_MAP, AI_TEXT_SEARCH_KEYS, truncatePreview } from "../domain.js"
+import { AI_ATTR_MAP, AI_FTS_KEYS, AI_TEXT_SEARCH_KEYS, truncatePreview } from "../domain.js"
 import { attributeMap, nanosToMilliseconds, parseAnyValue, spanKindLabel, spanStatusLabel, stringifyValue, type OtlpLogExportRequest, type OtlpTraceExportRequest } from "../otlp.js"
 
 interface SpanRow {
@@ -57,6 +57,13 @@ interface TraceSearch {
 	readonly status?: "ok" | "error" | null
 	readonly minDurationMs?: number | null
 	readonly attributeFilters?: Readonly<Record<string, string>>
+	/**
+	 * Full-text match against the AI prompt/response/tool attribute values
+	 * on any span in the trace (see AI_FTS_KEYS). When set, traces are
+	 * filtered to those containing at least one span whose indexed LLM
+	 * content matches. Powered by span_attr_fts (FTS5).
+	 */
+	readonly aiText?: string | null
 	readonly lookbackMinutes?: number
 	readonly limit?: number
 	readonly cursorStartedAtMs?: number
@@ -571,6 +578,66 @@ export const TelemetryStoreLive = Layer.effect(
 			// FTS is optional; queries will fall back to LIKE if unavailable.
 		}
 
+		// External-content FTS5 over the subset of span_attributes.value rows
+		// whose key is in AI_FTS_KEYS (LLM prompts, responses, tool calls,
+		// etc.). External content means the inverted index is the only
+		// FTS storage — the value text itself continues to live once in
+		// span_attributes, not duplicated into the FTS table. On a 2 GB DB
+		// with 270 MB of prompt JSON this typically adds ~50-120 MB of
+		// index, turning a 500-800ms LIKE scan into a <50ms MATCH.
+		//
+		// Keys are inlined into the trigger DDL rather than looked up in a
+		// side table so the `WHEN` guard stays constant-cost (a subquery
+		// would run on every span_attributes insert — ~60/span).
+		let hasAttrFts = hasFts
+		if (hasFts) {
+			try {
+				const keyList = AI_FTS_KEYS.map((k) => `'${k.replace(/'/g, "''")}'`).join(", ")
+				db.exec(`
+					CREATE VIRTUAL TABLE IF NOT EXISTS span_attr_fts USING fts5(
+						value,
+						content='span_attributes',
+						content_rowid='rowid',
+						tokenize='unicode61 remove_diacritics 2'
+					);
+
+					-- Mirror inserts into FTS when the key carries LLM content.
+					-- NOTE: triggers MUST use fully-qualified name (new.rowid,
+					-- new.value) and emit rowid so external-content FTS can
+					-- fetch the value back via span_attributes.rowid.
+					CREATE TRIGGER IF NOT EXISTS span_attr_fts_ai AFTER INSERT ON span_attributes
+					WHEN new.key IN (${keyList})
+					BEGIN
+						INSERT INTO span_attr_fts(rowid, value) VALUES (new.rowid, new.value);
+					END;
+
+					-- Delete with the same guard so retention & re-ingest stay
+					-- in sync. External-content 'delete' command needs the
+					-- original value to remove from the inverted index.
+					CREATE TRIGGER IF NOT EXISTS span_attr_fts_ad AFTER DELETE ON span_attributes
+					WHEN old.key IN (${keyList})
+					BEGIN
+						INSERT INTO span_attr_fts(span_attr_fts, rowid, value)
+						VALUES ('delete', old.rowid, old.value);
+					END;
+
+					-- Handle in-place updates (rare; re-ingest usually goes
+					-- DELETE then INSERT but belt-and-braces).
+					CREATE TRIGGER IF NOT EXISTS span_attr_fts_au AFTER UPDATE ON span_attributes
+					WHEN old.key IN (${keyList}) OR new.key IN (${keyList})
+					BEGIN
+						INSERT INTO span_attr_fts(span_attr_fts, rowid, value)
+						VALUES ('delete', old.rowid, old.value);
+						INSERT INTO span_attr_fts(rowid, value)
+						SELECT new.rowid, new.value
+						WHERE new.key IN (${keyList});
+					END;
+				`)
+			} catch {
+				hasAttrFts = false
+			}
+		}
+
 		try {
 			db.exec(`ALTER TABLE trace_summaries ADD COLUMN active_span_count INTEGER NOT NULL DEFAULT 0`)
 		} catch {
@@ -740,6 +807,37 @@ export const TelemetryStoreLive = Layer.effect(
 			try { db.exec(`PRAGMA optimize;`) } catch { /* ignore */ }
 		})
 		yield* Effect.forkScoped(Effect.repeat(refreshPlannerStats, Schedule.spaced("15 minutes")))
+
+		// One-time backfill for existing DBs: if span_attr_fts is empty but
+		// span_attributes has rows with AI_FTS_KEYS, populate the index.
+		// Runs forked so server startup isn't blocked; queries hitting the
+		// FTS will just return empty until the fill lands. On a 2 GB DB with
+		// ~400 matching rows this takes ~3-8 seconds.
+		if (hasAttrFts) {
+			const backfillAttrFts = Effect.sync(() => {
+				try {
+					const ftsCount = (db.query(`SELECT COUNT(*) AS c FROM span_attr_fts`).get() as { c: number }).c
+					if (ftsCount > 0) return
+					const keyList = AI_FTS_KEYS.map((k) => `'${k.replace(/'/g, "''")}'`).join(", ")
+					const attrCount = (db.query(
+						`SELECT COUNT(*) AS c FROM span_attributes WHERE key IN (${keyList})`,
+					).get() as { c: number }).c
+					if (attrCount === 0) return
+					// Single INSERT..SELECT is atomic and fast; FTS5 batches
+					// its internal segment writes. No transaction wrapper
+					// needed — it runs as one statement.
+					db.exec(`
+						INSERT INTO span_attr_fts(rowid, value)
+						SELECT rowid, value FROM span_attributes WHERE key IN (${keyList})
+					`)
+				} catch {
+					// Backfill failure is never fatal — new ingests still
+					// populate FTS via the trigger, and queries fall back to
+					// LIKE when FTS lookups return empty.
+				}
+			})
+			yield* Effect.forkScoped(backfillAttrFts)
+		}
 
 		const ingestTraces = Effect.fn("motel/TelemetryStore.ingestTraces")(function* (payload: OtlpTraceExportRequest) {
 			return yield* Effect.sync(() => {
@@ -963,6 +1061,25 @@ export const TelemetryStoreLive = Layer.effect(
 				if (exactAttrMatch) {
 					clauses.push(`trace_id IN (SELECT DISTINCT trace_id FROM (${exactAttrMatch.sql}))`)
 					params.push(...exactAttrMatch.params)
+				}
+
+				// `:ai <query>` — FTS match against LLM content keys. Joins
+				// span_attr_fts back to span_attributes to collect trace_ids
+				// whose spans carry matching prompt/response content. Falls
+				// through to no-op when the query tokenizes empty (e.g. only
+				// stopwords or operator-chars) so users don't get a silently
+				// empty list.
+				if (input.aiText) {
+					const aiFtsQuery = toFtsMatchQuery(input.aiText)
+					if (hasAttrFts && aiFtsQuery) {
+						clauses.push(`trace_id IN (
+							SELECT DISTINCT sa.trace_id
+							FROM span_attr_fts fts
+							JOIN span_attributes sa ON sa.rowid = fts.rowid
+							WHERE fts.value MATCH ?
+						)`)
+						params.push(aiFtsQuery)
+					}
 				}
 
 				const rows = db.query(`
@@ -1624,11 +1741,27 @@ export const TelemetryStoreLive = Layer.effect(
 				params.push(key, value)
 			}
 
-			// Text search across prompt/response/tool attribute values
+			// Text search across prompt/response/tool attribute values via
+			// FTS5. Prefers the external-content span_attr_fts index when
+			// available, falls back to case-insensitive LIKE so old DBs
+			// without FTS still work. FTS turns ~500ms full scans of 3 MB
+			// prompt JSON into <50ms MATCH lookups.
 			if ("text" in input && input.text) {
-				const textKeys = AI_TEXT_SEARCH_KEYS.map(() => "?").join(", ")
-				clauses.push(`EXISTS (SELECT 1 FROM span_attributes WHERE span_attributes.trace_id = s.trace_id AND span_attributes.span_id = s.span_id AND key IN (${textKeys}) AND value LIKE ? COLLATE NOCASE)`)
-				params.push(...AI_TEXT_SEARCH_KEYS, `%${input.text}%`)
+				const ftsQuery = toFtsMatchQuery(input.text)
+				if (hasAttrFts && ftsQuery) {
+					clauses.push(`EXISTS (
+						SELECT 1 FROM span_attr_fts fts
+						JOIN span_attributes sa ON sa.rowid = fts.rowid
+						WHERE sa.trace_id = s.trace_id
+						AND sa.span_id = s.span_id
+						AND fts.value MATCH ?
+					)`)
+					params.push(ftsQuery)
+				} else {
+					const textKeys = AI_TEXT_SEARCH_KEYS.map(() => "?").join(", ")
+					clauses.push(`EXISTS (SELECT 1 FROM span_attributes WHERE span_attributes.trace_id = s.trace_id AND span_attributes.span_id = s.span_id AND key IN (${textKeys}) AND value LIKE ? COLLATE NOCASE)`)
+					params.push(...AI_TEXT_SEARCH_KEYS, `%${input.text}%`)
+				}
 			}
 
 			return { clauses, params }

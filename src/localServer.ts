@@ -335,6 +335,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 							status: (url.searchParams.get("status") as "ok" | "error" | null) ?? null,
 							minDurationMs: url.searchParams.get("minDurationMs") ? Number.parseFloat(url.searchParams.get("minDurationMs") ?? "") : null,
 							attributeFilters,
+							aiText: url.searchParams.get("aiText"),
 							limit: limit + 1,
 							lookbackMinutes,
 							cursorStartedAtMs: cursor?.kind === "trace" ? cursor.startedAt : undefined,

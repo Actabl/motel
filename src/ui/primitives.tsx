@@ -80,13 +80,25 @@ export const SeparatorColumn = ({ height, junctionChars }: { height: number; jun
 	)
 }
 
-export const FilterBar = ({ text, width }: { text: string; width: number }) => (
-	<TextLine fg={colors.accent}>
-		<span fg={colors.muted}>{"/"}</span>
-		<span fg={colors.text}>{fitCell(text, width - 2)}</span>
-		<span fg={colors.accent}>{"\u2588"}</span>
-	</TextLine>
-)
+export const FilterBar = ({ text, width }: { text: string; width: number }) => {
+	// Layout: "/<text>█  op name · :error · :ai <query>"
+	// Cursor block sits immediately after the typed text (no padding —
+	// fitCell would pad the empty string to fill the available width and
+	// push the cursor to the far right, which looked like a bug). The
+	// hint only renders while the input is empty so real typing never
+	// collides with it.
+	const hint = text.length === 0 ? "  op name · :error · :ai <query>" : ""
+	const textMaxWidth = Math.max(1, width - 2 - hint.length)
+	const displayText = text.length > textMaxWidth ? text.slice(text.length - textMaxWidth) : text
+	return (
+		<TextLine fg={colors.accent}>
+			<span fg={colors.muted}>{"/"}</span>
+			<span fg={colors.text}>{displayText}</span>
+			<span fg={colors.accent}>{"\u2588"}</span>
+			{hint ? <span fg={colors.muted}>{hint}</span> : null}
+		</TextLine>
+	)
+}
 
 const FooterKey = ({ label }: { label: string }) => <span fg={colors.count} attributes={TextAttributes.BOLD}>{label}</span>
 
@@ -118,7 +130,7 @@ export const HelpModal = ({ width, height, autoRefresh, themeLabel, onClose }: {
 					{row("t", `cycle theme (${themeLabel})`)}
 					{row("tab", "toggle service logs")}
 					{row("[ ]", "switch service")}
-					{row("/", "filter by root operation")}
+					{row("/", "filter by root operation (\u2003:error, :ai <query>)")}
 					{row("f", "filter traces by span attribute")}
 					{row("s", "cycle sort mode")}
 					{row("a", `auto refresh ${autoRefresh ? "on" : "off"}`)}

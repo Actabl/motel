@@ -27,11 +27,14 @@ import {
 	traceSortAtom,
 	type TraceSortMode,
 	traceStateAtom,
+	waterfallFilterModeAtom,
+	waterfallFilterTextAtom,
 } from "./state.ts"
 import { filterFacets } from "./AttrFilterModal.tsx"
 import { G_PREFIX_TIMEOUT_MS } from "./theme.ts"
 import { cycleThemeName, themeLabel } from "./theme.ts"
 import { getVisibleSpans } from "./Waterfall.tsx"
+import { computeMatchingSpanIds, findAdjacentMatch } from "./waterfallFilter.ts"
 import { resolveCollapseStep } from "./waterfallNav.ts"
 
 /**
@@ -53,6 +56,10 @@ const extractPrintable = (key: {
 	readonly meta: boolean
 }): string | null => {
 	if (key.ctrl || key.meta) return null
+	// Space arrives as `key.name === "space"` with a 1-char sequence. We
+	// handle it explicitly because the generic "length > 1" branch below
+	// only catches multi-char paste sequences, not a lone " ".
+	if (key.name === "space") return " "
 	if (key.name.length === 1) return key.name
 	const seq = key.sequence ?? ""
 	// Only accept sequences that are pure printable text. Any escape or
@@ -105,6 +112,8 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const [attrFacets] = useAtom(attrFacetStateAtom)
 	const [activeAttrKey, setActiveAttrKey] = useAtom(activeAttrKeyAtom)
 	const [activeAttrValue, setActiveAttrValue] = useAtom(activeAttrValueAtom)
+	const [waterfallFilterMode, setWaterfallFilterMode] = useAtom(waterfallFilterModeAtom)
+	const [waterfallFilterText, setWaterfallFilterText] = useAtom(waterfallFilterTextAtom)
 
 	const pendingGRef = useRef(false)
 	const pendingGTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -151,12 +160,12 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		}
 	}, [renderer, setFilterText, setPickerInput, setPickerIndex])
 
-	const stateRef = useRef({ traceState, serviceLogState, selectedServiceLogIndex, selectedTheme, selectedTraceIndex, selectedSpanIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, pickerMode, pickerInput, pickerIndex, attrFacets, activeAttrKey, activeAttrValue, ...params })
+	const stateRef = useRef({ traceState, serviceLogState, selectedServiceLogIndex, selectedTheme, selectedTraceIndex, selectedSpanIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, pickerMode, pickerInput, pickerIndex, attrFacets, activeAttrKey, activeAttrValue, waterfallFilterMode, waterfallFilterText, ...params })
 	// Keep the keyboard handler's state mirror in sync before the next paint.
 	// OpenTUI's own effect-event helper uses useLayoutEffect for this same reason:
 	// rapid repeated keypresses can otherwise observe stale selection state.
 	useLayoutEffect(() => {
-		stateRef.current = { traceState, serviceLogState, selectedServiceLogIndex, selectedTheme, selectedTraceIndex, selectedSpanIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, pickerMode, pickerInput, pickerIndex, attrFacets, activeAttrKey, activeAttrValue, ...params }
+		stateRef.current = { traceState, serviceLogState, selectedServiceLogIndex, selectedTheme, selectedTraceIndex, selectedSpanIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, pickerMode, pickerInput, pickerIndex, attrFacets, activeAttrKey, activeAttrValue, waterfallFilterMode, waterfallFilterText, ...params }
 	})
 
 	const clearPendingG = () => {
@@ -446,6 +455,43 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			}
 			return
 		}
+
+		// Waterfall filter mode: text-capture scoped to the current
+		// trace's spans.
+		// - enter  → commit: close input but keep text so dimming persists
+		//            while the user navigates. `/` can be pressed again
+		//            to edit.
+		// - esc    → cancel: clear text + exit input entirely.
+		// - ctrl-c → clear input if non-empty, otherwise exit.
+		if (s.waterfallFilterMode) {
+			if (key.name === "escape") {
+				setWaterfallFilterMode(false)
+				setWaterfallFilterText("")
+				return
+			}
+			if (key.ctrl && key.name === "c") {
+				if (s.waterfallFilterText.length > 0) {
+					setWaterfallFilterText("")
+				} else {
+					setWaterfallFilterMode(false)
+				}
+				return
+			}
+			if (key.name === "return" || key.name === "enter") {
+				setWaterfallFilterMode(false)
+				return
+			}
+			if (key.name === "backspace") {
+				setWaterfallFilterText((current) => current.slice(0, -1))
+				return
+			}
+			const printable = extractPrintable(key)
+			if (printable) {
+				setWaterfallFilterText((current) => current + printable)
+				return
+			}
+			return
+		}
 		const plainG = key.name === "g" && !key.ctrl && !key.meta && !key.option && !key.shift
 		const shiftedG = key.name === "g" && key.shift
 		const questionMark = key.name === "?" || (key.name === "/" && key.shift)
@@ -524,6 +570,14 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 				setShowHelp(false)
 				return
 			}
+			// Committed waterfall filter outranks drill-back: hitting esc
+			// should clear the dim before jumping you out of the span
+			// detail pane. That keeps a single `esc` predictable whether
+			// the filter was applied by typing or left over from before.
+			if (s.waterfallFilterText.length > 0) {
+				setWaterfallFilterText("")
+				return
+			}
 			if (s.detailView === "span-detail" || s.detailView === "service-logs") {
 				setDetailView("waterfall")
 				return
@@ -588,8 +642,42 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			s.flashNotice(`Theme: ${themeLabel(nextTheme)}`)
 			return
 		}
+		// `n` / `N`: jump between matches of the committed waterfall filter.
+		// Only active when drilled into a trace AND the filter has text
+		// (committed or live — either way, there's a dim/highlight we can
+		// step through). Wraps at the ends like vim's /n. Plain `n` forward,
+		// shift-n (`N`) backward.
+		if ((key.name === "n" || key.name === "N") && !key.ctrl && !key.meta) {
+			const inWaterfall = s.detailView === "span-detail" || s.selectedSpanIndex !== null
+			if (inWaterfall && s.waterfallFilterText.length > 0 && s.selectedTrace) {
+				const visibleSpans = getVisibleSpans(s.selectedTrace.spans, s.collapsedSpanIds)
+				const matchingIds = computeMatchingSpanIds(visibleSpans, s.waterfallFilterText)
+				if (matchingIds && matchingIds.size > 0) {
+					const direction = key.name === "N" ? -1 : 1
+					const next = findAdjacentMatch(visibleSpans, matchingIds, s.selectedSpanIndex, direction)
+					if (next !== null) setSelectedSpanIndex(next)
+					else s.flashNotice("No matches")
+				} else {
+					s.flashNotice("No matches")
+				}
+				return
+			}
+			// Fall through when not in a trace detail view — reserves `n`
+			// for other future bindings without shadowing them globally.
+		}
+
 		if (key.name === "/" && !key.shift) {
-			setFilterMode(true)
+			// When drilled into a trace (viewLevel >= 1 — waterfall or
+			// span detail is the dominant pane), `/` opens a filter scoped
+			// to the current trace's spans instead of the trace list.
+			// Drill level here is inferred from selectedSpanIndex/detailView
+			// the same way useAppLayout does it.
+			const inWaterfall = s.detailView === "span-detail" || s.selectedSpanIndex !== null
+			if (inWaterfall) {
+				setWaterfallFilterMode(true)
+			} else {
+				setFilterMode(true)
+			}
 			return
 		}
 		if ((key.name === "f" || key.name === "F") && !key.ctrl && !key.meta) {

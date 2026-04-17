@@ -251,6 +251,7 @@ const WaterfallRow = memo(({
 	collapsed,
 	hasChildSpans,
 	suffixMetrics,
+	dimmed,
 	onSelect,
 }: {
 	span: TraceSpanItem
@@ -262,6 +263,7 @@ const WaterfallRow = memo(({
 	collapsed: boolean
 	hasChildSpans: boolean
 	suffixMetrics: WaterfallSuffixMetrics
+	dimmed: boolean
 	onSelect: () => void
 }) => {
 	const prefix = buildTreePrefix(spans, index)
@@ -282,12 +284,23 @@ const WaterfallRow = memo(({
 	const rowBg = selected ? colors.selectedBg : colors.screenBg
 	const { segments } = renderWaterfallBar(span, trace, barWidth, barColor, laneColor, rowBg)
 	const bg = selected ? colors.selectedBg : undefined
-	const treeColor = selected ? colors.separator : colors.treeLine
-	const indicatorColor = isError ? colors.error : hasChildSpans ? (selected ? colors.selectedText : colors.muted) : colors.passing
-	const opColor = selected ? colors.selectedText : span.isRunning ? colors.warning : colors.text
+	// Dimmed rows (non-matching under an active waterfall filter) collapse
+	// their palette to the muted separator color so matches stand out.
+	// Selection always wins — the selected row keeps its full brightness
+	// so you can still see where the cursor is while scanning.
+	const treeColor = selected ? colors.separator : dimmed ? colors.separator : colors.treeLine
+	const indicatorColor = selected ? colors.selectedText
+		: dimmed ? colors.separator
+		: isError ? colors.error
+		: hasChildSpans ? colors.muted
+		: colors.passing
+	const opColor = selected ? colors.selectedText
+		: dimmed ? colors.separator
+		: span.isRunning ? colors.warning
+		: colors.text
 
-	const durationFg = durationColor(span.durationMs)
-	const unitFg = colors.muted
+	const durationFg = selected ? colors.selectedText : dimmed ? colors.separator : durationColor(span.durationMs)
+	const unitFg = dimmed && !selected ? colors.separator : colors.muted
 
 	// Split the duration so the unit (s/ms) renders dimmer than the number.
 	const { number: durNumber, unit: durUnit } = splitDuration(Math.max(0, span.durationMs))
@@ -373,6 +386,7 @@ export const WaterfallTimeline = ({
 	bodyLines,
 	selectedSpanIndex,
 	collapsedSpanIds,
+	matchingSpanIds,
 	onSelectSpan,
 }: {
 	trace: TraceItem
@@ -383,6 +397,11 @@ export const WaterfallTimeline = ({
 	bodyLines: number
 	selectedSpanIndex: number | null
 	collapsedSpanIds: ReadonlySet<string>
+	/**
+	 * When set, spans whose spanId is NOT in this set are dimmed. Null
+	 * means no filter active — skip the per-row lookup entirely.
+	 */
+	matchingSpanIds?: ReadonlySet<string> | null
 	onSelectSpan: (index: number) => void
 }) => {
 	const selectedSpan = selectedSpanIndex !== null ? filteredSpans[selectedSpanIndex] ?? null : null
@@ -392,29 +411,37 @@ export const WaterfallTimeline = ({
 		spanIndexById.set(trace.spans[i].spanId, i)
 	}
 
-	// Virtual windowing: only render visible rows, shift window only when
-	// the selection would go out of view (no jerkiness).
+	// Virtual windowing: only render visible rows. We track scroll offset
+	// as state so the mouse wheel can scroll the window INDEPENDENTLY of
+	// the selected span (mirrors TraceList behavior). Selection still
+	// follows: if the user moves selection off-screen via j/k, we nudge
+	// the window to keep it visible — but wheel-scrolling never changes
+	// selection, only clicking a row does.
 	const viewportSize = Math.max(1, bodyLines)
-	const scrollOffsetRef = useRef(0)
+	const maxOffset = Math.max(0, filteredSpans.length - viewportSize)
+	const [scrollOffset, setScrollOffset] = useState(0)
 	const lastTraceIdRef = useRef<string | null>(null)
 
-	// Reset scroll offset when the trace changes
+	// Reset scroll offset when the trace changes.
 	if (trace.traceId !== lastTraceIdRef.current) {
-		scrollOffsetRef.current = 0
+		setScrollOffset(0)
 		lastTraceIdRef.current = trace.traceId
 	}
 
-	// Only shift the window when the selection would be outside it
-	if (selectedSpanIndex !== null) {
-		if (selectedSpanIndex < scrollOffsetRef.current) {
-			scrollOffsetRef.current = selectedSpanIndex
-		} else if (selectedSpanIndex >= scrollOffsetRef.current + viewportSize) {
-			scrollOffsetRef.current = selectedSpanIndex - viewportSize + 1
-		}
-	}
-	scrollOffsetRef.current = Math.max(0, Math.min(scrollOffsetRef.current, Math.max(0, filteredSpans.length - viewportSize)))
+	// Auto-follow selection: only if the selected span would be hidden
+	// by the current window, shift just enough to bring it back. Runs in
+	// layout effect so the visible window is accurate on the same paint
+	// that the selection changed.
+	useLayoutEffect(() => {
+		if (selectedSpanIndex === null) return
+		setScrollOffset((current) => {
+			if (selectedSpanIndex < current) return selectedSpanIndex
+			if (selectedSpanIndex >= current + viewportSize) return selectedSpanIndex - viewportSize + 1
+			return current
+		})
+	}, [selectedSpanIndex, viewportSize])
 
-	const windowStart = scrollOffsetRef.current
+	const windowStart = Math.max(0, Math.min(scrollOffset, maxOffset))
 	const windowSpans = filteredSpans.slice(windowStart, windowStart + viewportSize)
 	const blankCount = Math.max(0, viewportSize - windowSpans.length)
 
@@ -422,19 +449,17 @@ export const WaterfallTimeline = ({
 	// row's duration cell lines up on the same right-edge column.
 	const suffixMetrics = getWaterfallSuffixMetrics(windowSpans)
 
-	// Mouse wheel moves the span selection by the scroll delta. The waterfall
-	// uses virtual windowing (not a scrollbox) so native scroll does nothing;
-	// we convert wheel events into selection moves, which the windowing code
-	// already translates into visible-viewport shifts.
+	// Mouse wheel scrolls the window without touching selection — matches
+	// the trace list, so the user can browse ahead of their cursor freely
+	// and click a row to commit. Delta is scaled 1:1 with opentui's wheel
+	// reporting (1 notch ≈ 3 rows on most terminals).
 	const handleWheel = (event: { scroll?: { direction: string; delta: number }; stopPropagation?: () => void }) => {
 		const info = event.scroll
 		if (!info || filteredSpans.length === 0) return
 		const magnitude = Math.max(1, Math.round(info.delta))
 		const signed = info.direction === "up" ? -magnitude : info.direction === "down" ? magnitude : 0
 		if (signed === 0) return
-		const start = selectedSpanIndex ?? 0
-		const next = Math.max(0, Math.min(start + signed, filteredSpans.length - 1))
-		if (next !== selectedSpanIndex) onSelectSpan(next)
+		setScrollOffset((current) => Math.max(0, Math.min(current + signed, maxOffset)))
 		event.stopPropagation?.()
 	}
 
@@ -443,6 +468,7 @@ export const WaterfallTimeline = ({
 			{windowSpans.map((span, index) => {
 				const actualIndex = windowStart + index
 				const fullIndex = spanIndexById.get(span.spanId) ?? -1
+				const dimmed = matchingSpanIds != null && !matchingSpanIds.has(span.spanId)
 				return (
 					<WaterfallRow
 						key={`${trace.traceId}-${span.spanId}`}
@@ -455,6 +481,7 @@ export const WaterfallTimeline = ({
 						collapsed={collapsedSpanIds.has(span.spanId)}
 						hasChildSpans={fullIndex >= 0 && findFirstChildIndex(trace.spans, fullIndex) !== null}
 						suffixMetrics={suffixMetrics}
+						dimmed={dimmed}
 						onSelect={() => onSelectSpan(actualIndex)}
 					/>
 				)

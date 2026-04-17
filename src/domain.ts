@@ -145,13 +145,55 @@ export const AI_ATTR_MAP = {
 	responseTimestamp: "ai.response.timestamp",
 } as const
 
-/** Attribute keys to search across when using the `text` filter */
-export const AI_TEXT_SEARCH_KEYS = [
-	"ai.prompt.messages",
+/**
+ * Attribute keys that carry LLM prompt/response content and should be
+ * indexed in the span-attribute FTS table. These are the keys emitted by
+ * well-known LLM instrumentation conventions:
+ *
+ * - **Vercel AI SDK** (`ai.*`): rich, SDK-specific attributes captured by
+ *   `experimental_telemetry` on `generateText` / `streamText` / `generateObject`.
+ * - **OpenTelemetry GenAI semantic conventions** (`gen_ai.*`): the
+ *   cross-vendor standard. The singular `prompt`/`completion` attrs are
+ *   deprecated in favor of event-based capture but are still emitted by
+ *   most instrumentations, so we keep them.
+ * - **OpenInference** (`input.value` / `output.value`): Arize Phoenix /
+ *   LangChain-style normalized input/output.
+ *
+ * Keys here trigger FTS indexing on insert via a trigger in TelemetryStore.
+ * Adding a key requires a one-time backfill; removing one leaves orphan
+ * FTS entries that get cleaned up on next retention pass.
+ */
+export const AI_FTS_KEYS = [
+	// Vercel AI SDK
 	"ai.prompt",
-	"ai.response.text",
+	"ai.prompt.messages",
 	"ai.prompt.tools",
+	"ai.prompt.toolChoice",
+	"ai.response.text",
+	"ai.response.toolCalls",
+	"ai.response.reasoning",
+	"ai.response.object",
+	"ai.toolCall.args",
+	"ai.toolCall.result",
+	// OpenTelemetry GenAI semantic conventions
+	"gen_ai.prompt",
+	"gen_ai.completion",
+	"gen_ai.input.messages",
+	"gen_ai.output.messages",
+	"gen_ai.system_instructions",
+	"gen_ai.tool.definitions",
+	"gen_ai.tool.message.content",
+	// OpenInference (Phoenix, LangChain, etc.)
+	"input.value",
+	"output.value",
 ] as const
+
+/**
+ * Back-compat alias. The `text` filter on `/api/ai/calls` historically
+ * LIKE-searched these four keys; now FTS indexes the broader AI_FTS_KEYS
+ * set so the filter transparently covers more content.
+ */
+export const AI_TEXT_SEARCH_KEYS = AI_FTS_KEYS
 
 const PREVIEW_LENGTH = 200
 

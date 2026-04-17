@@ -146,7 +146,12 @@
 - `[` / `]`: switch services
 - `s`: cycle sort mode (recent → slowest → errors)
 - `t`: cycle theme (motel-default → tokyo-night → catppuccin)
-- `/`: enter filter mode (type to match on root operation name; `:error` restricts to failing traces)
+- `/`: enter filter mode.
+  - **In the trace list (L0)** the input matches against the root operation name. Composable modifiers:
+    - `:error` — restrict to traces with at least one failed span (client-side)
+    - `:ai <query>` — FTS5-backed search against LLM prompt/response/tool content (`AI_FTS_KEYS`) across every span in the trace. Tokens are prefix-matched and implicitly AND'd. Debounced 250ms.
+    - Modifiers compose: `/ :ai rate limit :error`
+  - **In the waterfall (L1/L2)** the input runs a client-side substring match against each span's operation name and tag values. Non-matching spans are dimmed; the filter bar shows the live match count. `enter` commits (dim persists while you navigate); `esc` clears.
 - `f`: open attribute filter picker (browse span-attribute keys → values for the current service; `backspace` walks back to keys; `esc` in the trace list clears the active filter)
 - `a`: pause or resume auto-refresh
 - `r`: refresh now

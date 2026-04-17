@@ -18,6 +18,8 @@ interface TraceWorkspaceProps {
 	readonly detailView: DetailView
 	readonly filterMode: boolean
 	readonly filterText: string
+	readonly waterfallFilterMode: boolean
+	readonly waterfallFilterText: string
 	readonly traceListProps: TraceListProps
 	readonly selectedTraceService: string | null
 	readonly serviceLogState: ServiceLogState
@@ -40,6 +42,8 @@ export const TraceWorkspace = ({
 	detailView,
 	filterMode,
 	filterText,
+	waterfallFilterMode,
+	waterfallFilterText,
 	traceListProps,
 	selectedTraceService,
 	serviceLogState,
@@ -132,7 +136,7 @@ export const TraceWorkspace = ({
 							selectedSpanIndex={selectedSpanIndex}
 							collapsedSpanIds={collapsedSpanIds}
 							focused={false}
-							onSelectSpan={selectSpan}
+							waterfallFilterMode={waterfallFilterMode} waterfallFilterText={waterfallFilterText} onSelectSpan={selectSpan}
 						/>
 					</box>
 				</box>
@@ -159,7 +163,7 @@ export const TraceWorkspace = ({
 							selectedSpanIndex={selectedSpanIndex}
 							collapsedSpanIds={collapsedSpanIds}
 							focused={true}
-							onSelectSpan={selectSpan}
+							waterfallFilterMode={waterfallFilterMode} waterfallFilterText={waterfallFilterText} onSelectSpan={selectSpan}
 						/>
 					</box>
 				</box>
@@ -182,7 +186,7 @@ export const TraceWorkspace = ({
 						selectedSpanIndex={selectedSpanIndex}
 						collapsedSpanIds={collapsedSpanIds}
 						focused={false}
-						onSelectSpan={selectSpan}
+						waterfallFilterMode={waterfallFilterMode} waterfallFilterText={waterfallFilterText} onSelectSpan={selectSpan}
 					/>
 				</box>
 				<SeparatorColumn height={wideBodyHeight} junctionChars={separatorCrossChars} />
@@ -226,7 +230,7 @@ export const TraceWorkspace = ({
 					selectedSpanIndex={selectedSpanIndex}
 					collapsedSpanIds={collapsedSpanIds}
 					focused={false}
-					onSelectSpan={selectSpan}
+					waterfallFilterMode={waterfallFilterMode} waterfallFilterText={waterfallFilterText} onSelectSpan={selectSpan}
 				/>
 			</>
 		)
@@ -265,7 +269,7 @@ export const TraceWorkspace = ({
 					selectedSpanIndex={selectedSpanIndex}
 					collapsedSpanIds={collapsedSpanIds}
 					focused={true}
-					onSelectSpan={selectSpan}
+					waterfallFilterMode={waterfallFilterMode} waterfallFilterText={waterfallFilterText} onSelectSpan={selectSpan}
 				/>
 			) : (
 				<SpanDetailPane

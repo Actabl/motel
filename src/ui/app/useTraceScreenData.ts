@@ -1,5 +1,5 @@
 import { useAtom } from "@effect/atom-react"
-import { useCallback, useEffect, useMemo, useRef } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { config } from "../../config.js"
 import type { LogItem, TraceItem } from "../../domain.ts"
 import {
@@ -32,6 +32,7 @@ import {
 	traceSortAtom,
 	traceStateAtom,
 } from "../state.ts"
+import { parseFilterText } from "../filterParser.ts"
 import { getVisibleSpans } from "../Waterfall.tsx"
 
 export const useTraceScreenData = () => {
@@ -53,6 +54,17 @@ export const useTraceScreenData = () => {
 	const [activeAttrKey] = useAtom(activeAttrKeyAtom)
 	const [activeAttrValue] = useAtom(activeAttrValueAtom)
 	const [traceSort] = useAtom(traceSortAtom)
+
+	// `:ai <query>` is parsed out of the filter text and debounced so
+	// typing doesn't hammer FTS. The other modifiers (:error, operation
+	// needle) stay client-side since we already have those on trace
+	// summaries. 250ms feels responsive without firing on every keystroke.
+	const parsedFilter = useMemo(() => parseFilterText(filterText), [filterText])
+	const [debouncedAiText, setDebouncedAiText] = useState<string | null>(parsedFilter.aiText)
+	useEffect(() => {
+		const handle = setTimeout(() => setDebouncedAiText(parsedFilter.aiText), 250)
+		return () => clearTimeout(handle)
+	}, [parsedFilter.aiText])
 
 	const selectedTraceRef = useRef<string | null>(null)
 	const cacheEpochRef = useRef(0)
@@ -99,9 +111,18 @@ export const useTraceScreenData = () => {
 					setSelectedTraceService(effectiveService)
 				}
 
+				// Branch on whether any server-side filter is active. `:ai`
+				// (debouncedAiText) and the attr picker compose; either
+				// alone also uses the filtered loader. Unfiltered falls
+				// back to the fast recent-summaries path.
+				const hasAttrFilter = Boolean(activeAttrKey && activeAttrValue)
+				const hasAiFilter = Boolean(debouncedAiText)
 				const traces = effectiveService
-					? (activeAttrKey && activeAttrValue
-						? await loadFilteredTraceSummaries(effectiveService, { [activeAttrKey]: activeAttrValue })
+					? (hasAttrFilter || hasAiFilter
+						? await loadFilteredTraceSummaries(effectiveService, {
+							attributeFilters: hasAttrFilter ? { [activeAttrKey as string]: activeAttrValue as string } : undefined,
+							aiText: hasAiFilter ? debouncedAiText : null,
+						})
 						: await loadRecentTraceSummaries(effectiveService))
 					: []
 				if (cancelled) return
@@ -126,7 +147,7 @@ export const useTraceScreenData = () => {
 		return () => {
 			cancelled = true
 		}
-	}, [refreshNonce, selectedTraceService, activeAttrKey, activeAttrValue, setSelectedTraceIndex, setSelectedTraceService, setTraceState])
+	}, [refreshNonce, selectedTraceService, activeAttrKey, activeAttrValue, debouncedAiText, setSelectedTraceIndex, setSelectedTraceService, setTraceState])
 
 	useEffect(() => {
 		setSelectedTraceIndex((current) => {
@@ -359,13 +380,14 @@ export const useTraceScreenData = () => {
 		})
 	}, [serviceLogState.data.length, setSelectedServiceLogIndex])
 
+	// Client-side filters: `:error` + operation-name needle both run
+	// against already-loaded summaries (no server round-trip). The `:ai`
+	// query, by contrast, is applied server-side in the load effect
+	// above so we don't need to re-filter it here.
 	const preFilterTraces = filterText
 		? traceState.data.filter((trace) => {
-			const needle = filterText.toLowerCase()
-			const errorOnly = needle.includes(":error")
-			const textNeedle = needle.replace(":error", "").trim()
-			if (errorOnly && trace.errorCount === 0) return false
-			if (textNeedle && !trace.rootOperationName.toLowerCase().includes(textNeedle)) return false
+			if (parsedFilter.errorOnly && trace.errorCount === 0) return false
+			if (parsedFilter.operationNeedle && !trace.rootOperationName.toLowerCase().includes(parsedFilter.operationNeedle)) return false
 			return true
 		})
 		: traceState.data

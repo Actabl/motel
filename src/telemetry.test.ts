@@ -651,6 +651,39 @@ describe("motel telemetry store", () => {
 		expect(result[0]?.spanId).toBe("ai-stream-1")
 	})
 
+	it("matches AI calls via words in the response text", async () => {
+		// Verifies FTS indexes ai.response.text, not just ai.prompt*. The
+		// seeded ai-stream-2 has response "Error: rate limited".
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchAiCalls({ text: "rate limited" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+		expect(result.map((r) => r.spanId)).toContain("ai-stream-2")
+	})
+
+	it("matches AI calls case-insensitively and with partial words", async () => {
+		// unicode61 tokenizer is case-insensitive by default; prefix `*`
+		// handles partial terms like `"PROG"` matching `"programming"`.
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchAiCalls({ text: "PROG" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+		expect(result.map((r) => r.spanId)).toContain("ai-stream-1")
+	})
+
+	it("ignores FTS special characters without syntax errors", async () => {
+		// FTS5 treats `"`, `*`, `-`, `:` as operators; toFtsQuery must
+		// strip them so raw user input never crashes the query.
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchAiCalls({ text: `"joke" - about:programming*` }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+		expect(result.map((r) => r.spanId)).toContain("ai-stream-1")
+	})
+
 	it("filters AI calls by operation type", async () => {
 		const result = await storeRuntime.runPromise(
 			Effect.flatMap(TelemetryStore.asEffect(), (store) =>

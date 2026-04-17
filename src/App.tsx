@@ -15,6 +15,8 @@ import {
 	noticeAtom,
 	persistSelectedTheme,
 	selectedThemeAtom,
+	waterfallFilterModeAtom,
+	waterfallFilterTextAtom,
 } from "./ui/state.ts"
 import { applyTheme, colors, SEPARATOR, themeLabel } from "./ui/theme.ts"
 import { getVisibleSpans } from "./ui/Waterfall.tsx"
@@ -57,6 +59,8 @@ export const App = () => {
 	const [pickerInput] = useAtom(attrPickerInputAtom)
 	const [pickerIndex] = useAtom(attrPickerIndexAtom)
 	const [attrFacets] = useAtom(attrFacetStateAtom)
+	const [waterfallFilterMode] = useAtom(waterfallFilterModeAtom)
+	const [waterfallFilterText] = useAtom(waterfallFilterTextAtom)
 	useAttrFilterPicker(activeAttrKey)
 
 	const layout = useAppLayout({ width, height, notice, detailView, selectedSpanIndex })
@@ -179,6 +183,8 @@ export const App = () => {
 				detailView={detailView}
 				filterMode={filterMode}
 				filterText={filterText}
+				waterfallFilterMode={waterfallFilterMode}
+				waterfallFilterText={waterfallFilterText}
 				traceListProps={traceListProps}
 				selectedTraceService={selectedTraceService}
 				serviceLogState={serviceLogState}

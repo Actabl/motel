@@ -1,8 +1,9 @@
 import { useMemo } from "react"
 import type { TraceItem, TraceSummaryItem } from "../domain.ts"
 import { formatDuration, formatShortDate, formatTimestamp } from "./format.ts"
-import { AlignedHeaderLine, Divider, PlainLine, TextLine } from "./primitives.tsx"
+import { AlignedHeaderLine, Divider, FilterBar, PlainLine, TextLine } from "./primitives.tsx"
 import { getVisibleSpans, WaterfallTimeline } from "./Waterfall.tsx"
+import { computeMatchingSpanIds } from "./waterfallFilter.ts"
 import type { LoadStatus, LogState } from "./state.ts"
 import { colors, SEPARATOR } from "./theme.ts"
 
@@ -30,6 +31,8 @@ export const TraceDetailsPane = ({
 	collapsedSpanIds,
 	focused = false,
 	onSelectSpan,
+	waterfallFilterMode,
+	waterfallFilterText,
 }: {
 	trace: TraceItem | null
 	traceSummary: TraceSummaryItem | null
@@ -43,6 +46,8 @@ export const TraceDetailsPane = ({
 	collapsedSpanIds: ReadonlySet<string>
 	focused?: boolean
 	onSelectSpan: (index: number) => void
+	waterfallFilterMode: boolean
+	waterfallFilterText: string
 }) => {
 	const filteredSpans = useMemo(
 		() => trace ? getVisibleSpans(trace.spans, collapsedSpanIds) : [],
@@ -62,6 +67,15 @@ export const TraceDetailsPane = ({
 		() => selectedSpan ? traceLogsState.data.filter((log) => log.spanId === selectedSpan.spanId) : [],
 		[selectedSpan, traceLogsState.data],
 	)
+	const matchingSpanIds = useMemo(
+		() => trace ? computeMatchingSpanIds(trace.spans, waterfallFilterText) : null,
+		[trace, waterfallFilterText],
+	)
+	const matchCount = matchingSpanIds?.size ?? 0
+	// Reserve 1 row for the filter bar when it's being shown so the
+	// waterfall doesn't spill into the footer.
+	const showFilterBar = waterfallFilterMode || waterfallFilterText.length > 0
+	const waterfallBodyLines = showFilterBar ? Math.max(1, bodyLines - 1) : bodyLines
 
 	const traceMeta = trace ?? traceSummary
 	const hasTraceSelection = traceSummary !== null
@@ -112,6 +126,22 @@ export const TraceDetailsPane = ({
 						</TextLine>
 					</box>
 					<Divider width={paneWidth} />
+					{showFilterBar ? (
+						<box paddingLeft={1} paddingRight={1}>
+							{waterfallFilterMode ? (
+								<FilterBar text={waterfallFilterText} width={contentWidth} />
+							) : (
+								<TextLine>
+									<span fg={colors.muted}>{"/"}</span>
+									<span fg={colors.text}>{waterfallFilterText}</span>
+									<span fg={colors.separator}>{SEPARATOR}</span>
+									<span fg={colors.count}>{matchCount} match{matchCount === 1 ? "" : "es"}</span>
+									<span fg={colors.separator}>{SEPARATOR}</span>
+									<span fg={colors.muted}>esc clear</span>
+								</TextLine>
+							)}
+						</box>
+					) : null}
 					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 						<WaterfallTimeline
 							trace={trace}
@@ -119,9 +149,10 @@ export const TraceDetailsPane = ({
 							spanLogCounts={spanLogCounts}
 							selectedSpanLogs={selectedSpanLogs}
 							contentWidth={contentWidth}
-							bodyLines={bodyLines}
+							bodyLines={waterfallBodyLines}
 							selectedSpanIndex={selectedSpanIndex}
 							collapsedSpanIds={collapsedSpanIds}
+							matchingSpanIds={matchingSpanIds}
 							onSelectSpan={onSelectSpan}
 						/>
 					</box>

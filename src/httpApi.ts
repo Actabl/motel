@@ -121,6 +121,9 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						minDurationMs: Schema.optionalKey(Schema.Number).pipe(
 							Schema.annotateKey({ description: "Only return traces slower than this threshold (milliseconds)" }),
 						),
+						aiText: Schema.optionalKey(Schema.String).pipe(
+							Schema.annotateKey({ description: "FTS match against AI prompt/response/tool content across all spans in the trace. Tokens are prefix-matched and implicitly AND'd." }),
+						),
 						lookback: LookbackParam,
 						limit: LimitParam,
 						cursor: CursorParam,
@@ -128,7 +131,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 					success: TraceSummaryList,
 				})
 					.annotate(OpenApi.Summary, "Search traces with filters")
-					.annotate(OpenApi.Description, "Search compact trace summaries with filters. Use /api/traces/{traceId} for full details. Supports cursor pagination and attr.<key> filters in the query string."),
+					.annotate(OpenApi.Description, "Search compact trace summaries with filters. Use /api/traces/{traceId} for full details. Supports cursor pagination, attr.<key> filters in the query string, and aiText for full-text search across LLM prompt/response content."),
 
 				HttpApiEndpoint.get("traceStats", "/api/traces/stats", {
 					query: {
