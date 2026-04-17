@@ -519,8 +519,9 @@ export const App = () => {
 		: traceState.status === "loading"
 			? "loading traces..."
 			: ""
-	const headerLeft = `MOTEL  ${headerServiceLabel}`
-	const headerGap = Math.max(2, headerFooterWidth - headerLeft.length - headerRight.length)
+	// Rendered text is "MOTEL" + " · " (3 chars) + <service>
+	const headerLeftLen = "MOTEL".length + 3 + headerServiceLabel.length
+	const headerGap = Math.max(2, headerFooterWidth - headerLeftLen - headerRight.length)
 	const visibleFooterNotice = footerNotice ? fitCell(footerNotice.trimEnd(), headerFooterWidth) : null
 
 	const selectTraceById = useCallback((traceId: string) => {

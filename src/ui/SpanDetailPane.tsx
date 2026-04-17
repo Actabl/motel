@@ -44,7 +44,7 @@ export const SpanDetailPane = ({
 		: colors.muted
 
 	return (
-		<box flexDirection="column" height={bodyLines + SPAN_DETAIL_HEADER_ROWS} overflow="hidden">
+		<box flexDirection="column" width={paneWidth} height={bodyLines + SPAN_DETAIL_HEADER_ROWS} overflow="hidden">
 			<box paddingLeft={1}>
 				<AlignedHeaderLine left={headerTitle} right={headerRight} width={contentWidth} rightFg={headerColor} />
 			</box>

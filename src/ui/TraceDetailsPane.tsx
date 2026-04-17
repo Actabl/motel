@@ -89,7 +89,7 @@ export const TraceDetailsPane = ({
 	const firstWarning = traceMeta?.warnings[0] ?? ""
 
 	return (
-		<box flexDirection="column" height={bodyLines + TRACE_DETAILS_HEADER_ROWS} overflow="hidden">
+		<box flexDirection="column" width={paneWidth} height={bodyLines + TRACE_DETAILS_HEADER_ROWS} overflow="hidden">
 			<box paddingLeft={1}>
 				<AlignedHeaderLine left={headerTitle} right={headerRight} width={contentWidth} rightFg={headerColor} />
 			</box>
