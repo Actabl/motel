@@ -7,6 +7,7 @@ import type { LogItem, TraceItem, TraceSummaryItem } from "../domain.ts"
 import { queryRuntime } from "../runtime.ts"
 import { LogQueryService } from "../services/LogQueryService.ts"
 import { TraceQueryService } from "../services/TraceQueryService.ts"
+import type { ThemeName } from "./theme.ts"
 
 export type LoadStatus = "loading" | "ready" | "error"
 export type DetailView = "waterfall" | "span-detail" | "service-logs"
@@ -104,6 +105,26 @@ export const showHelpAtom = Atom.make(false).pipe(Atom.keepAlive)
 export const autoRefreshAtom = Atom.make(false).pipe(Atom.keepAlive)
 export const filterModeAtom = Atom.make(false).pipe(Atom.keepAlive)
 export const filterTextAtom = Atom.make("").pipe(Atom.keepAlive)
+
+const lastThemePath = `${dirname(config.otel.databasePath)}/last-theme.txt`
+const readLastTheme = (): ThemeName => {
+	try {
+		const raw = readFileSync(lastThemePath, "utf-8").trim()
+		return raw === "tokyo-night" || raw === "catppuccin" || raw === "motel-default" ? raw : "motel-default"
+	} catch {
+		return "motel-default"
+	}
+}
+
+let lastPersistedTheme = readLastTheme()
+
+export const persistSelectedTheme = (theme: ThemeName) => {
+	if (theme === lastPersistedTheme) return
+	lastPersistedTheme = theme
+	Bun.write(lastThemePath, theme).catch(() => {})
+}
+
+export const selectedThemeAtom = Atom.make<ThemeName>(readLastTheme()).pipe(Atom.keepAlive)
 
 export type TraceSortMode = "recent" | "slowest" | "errors"
 export const traceSortAtom = Atom.make<TraceSortMode>("recent").pipe(Atom.keepAlive)

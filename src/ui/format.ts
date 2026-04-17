@@ -19,11 +19,13 @@ export const formatShortDate = (date: Date) => date.toLocaleDateString("en-US", 
 export const formatTimestamp = (date: Date) => date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).toLowerCase()
 
 export const formatDuration = (durationMs: number) => {
+	const trimDecimal = (value: string) => value.replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1")
+
 	if (durationMs >= 10_000) return `${Math.round(durationMs / 1000)}s`
-	if (durationMs >= 1000) return `${(durationMs / 1000).toFixed(1)}s`
+	if (durationMs >= 1000) return `${trimDecimal((durationMs / 1000).toFixed(1))}s`
 	if (durationMs >= 100) return `${Math.round(durationMs)}ms`
-	if (durationMs >= 10) return `${durationMs.toFixed(1)}ms`
-	return `${durationMs.toFixed(2)}ms`
+	if (durationMs >= 10) return `${trimDecimal(durationMs.toFixed(1))}ms`
+	return `${trimDecimal(durationMs.toFixed(2))}ms`
 }
 
 export const lifecycleLabel = (value: { readonly isRunning: boolean }) => (value.isRunning ? "open" : "closed")

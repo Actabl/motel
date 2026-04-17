@@ -10,11 +10,17 @@ import { colors } from "./theme.ts"
 const getTraceRowLayout = (contentWidth: number) => {
 	const stateWidth = 1
 	const durationWidth = 8
-	const countWidth = 7
-	const ageWidth = 6
-	// gaps: 1 after state, 1 after duration, 1 after count, plus 2 slack on the right
-	const titleWidth = Math.max(8, contentWidth - stateWidth - durationWidth - countWidth - ageWidth - 5)
+	const countWidth = 6
+	const ageWidth = 4
+	// Keep the operation column intentionally capped so the metrics cluster stays
+	// visually closer, but still allow common operation names to fit cleanly.
+	const titleWidth = Math.min(20, Math.max(8, contentWidth - stateWidth - durationWidth - countWidth - ageWidth - 2))
 	return { stateWidth, durationWidth, countWidth, ageWidth, titleWidth }
+}
+
+const fitTraceTitle = (text: string, width: number) => {
+	if (width <= 0) return ""
+	return text.length <= width ? text.padEnd(width, " ") : text.slice(0, width)
 }
 
 const TraceRow = ({
@@ -30,8 +36,8 @@ const TraceRow = ({
 }) => {
 	const { stateWidth, durationWidth, countWidth, ageWidth, titleWidth } = getTraceRowLayout(contentWidth)
 	const title = trace.isRunning
-		? `${trace.rootOperationName} #${trace.traceId.slice(-6)} [${lifecycleLabel(trace)}]`
-		: `${trace.rootOperationName} #${trace.traceId.slice(-6)}`
+		? `${trace.rootOperationName} [${lifecycleLabel(trace)}]`
+		: trace.rootOperationName
 	const titleColor = selected ? colors.selectedText : trace.isRunning ? colors.warning : colors.text
 
 	return (
@@ -39,7 +45,7 @@ const TraceRow = ({
 			<TextLine fg={selected ? colors.selectedText : colors.text} bg={selected ? colors.selectedBg : undefined}>
 				<span fg={traceIndicatorColor(trace)}>{fitCell(traceIndicator(trace), stateWidth)}</span>
 				<span> </span>
-				<span fg={titleColor}>{fitCell(title, titleWidth)}</span>
+				<span fg={titleColor}>{fitTraceTitle(title, titleWidth)}</span>
 				<span fg={selected ? colors.accent : colors.count}>{fitCell(trace.durationMs >= 1 ? formatDuration(trace.durationMs) : "", durationWidth, "right")}</span>
 				<span> </span>
 				<span fg={colors.muted}>{fitCell(`${trace.spanCount}sp`, countWidth, "right")}</span>

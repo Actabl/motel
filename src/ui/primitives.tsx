@@ -90,17 +90,17 @@ export const FilterBar = ({ text, width }: { text: string; width: number }) => (
 
 const FooterKey = ({ label }: { label: string }) => <span fg={colors.count} attributes={TextAttributes.BOLD}>{label}</span>
 
-export const HelpModal = ({ width, height, autoRefresh, onClose }: { width: number; height: number; autoRefresh: boolean; onClose: () => void }) => {
+export const HelpModal = ({ width, height, autoRefresh, themeLabel, onClose }: { width: number; height: number; autoRefresh: boolean; themeLabel: string; onClose: () => void }) => {
 	const panelWidth = Math.min(76, Math.max(52, width - 10))
 	const left = Math.max(2, Math.floor((width - panelWidth) / 2))
 	const top = Math.max(1, Math.floor(height / 5))
 	const sectionGap = Math.max(1, panelWidth - 24)
 	const row = (key: string, desc: string) => (
-		<TextLine>
-			<span fg={colors.count} attributes={TextAttributes.BOLD}>{key.padEnd(11)}</span>
-			<span fg={colors.muted}>{desc}</span>
-		</TextLine>
-	)
+			<TextLine>
+				<span fg={colors.count} attributes={TextAttributes.BOLD}>{key.padEnd(11)}</span>
+				<span fg={colors.muted}>{desc}</span>
+			</TextLine>
+		)
 
 	return (
 		<box position="absolute" zIndex={3000} left={0} top={0} width={width} height={height} backgroundColor={RGBA.fromInts(0, 0, 0, 110)} onMouseUp={onClose}>
@@ -115,6 +115,7 @@ export const HelpModal = ({ width, height, autoRefresh, onClose }: { width: numb
 					{row("j k  ↑ ↓", "move selection")}
 					{row("enter", "select spans / open detail / jump from logs")}
 					{row("esc", "back out of detail or span selection")}
+					{row("t", `cycle theme (${themeLabel})`)}
 					{row("tab", "toggle service logs")}
 					{row("[ ]", "switch service")}
 					{row("/", "filter traces")}
@@ -145,6 +146,7 @@ export const FooterHints = ({ spanNavActive, detailView, autoRefresh, width: _wi
 		["j/k", "move"],
 		["enter", enterAction],
 		...(escAction ? [["esc", escAction] as [string, string]] : []),
+		["t", "theme"],
 		["tab", "logs"],
 		["/", "filter"],
 		["s", "sort"],

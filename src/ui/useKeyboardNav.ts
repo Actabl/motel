@@ -11,6 +11,7 @@ import {
 	filterModeAtom,
 	filterTextAtom,
 	refreshNonceAtom,
+	selectedThemeAtom,
 	selectedServiceLogIndexAtom,
 	selectedSpanIndexAtom,
 	selectedTraceIndexAtom,
@@ -22,6 +23,7 @@ import {
 	traceStateAtom,
 } from "./state.ts"
 import { G_PREFIX_TIMEOUT_MS } from "./theme.ts"
+import { cycleThemeName, themeLabel } from "./theme.ts"
 import { getVisibleSpans } from "./Waterfall.tsx"
 import { resolveCollapseStep } from "./waterfallNav.ts"
 
@@ -52,6 +54,7 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const [serviceLogState] = useAtom(serviceLogStateAtom)
 	const [selectedSpanIndex, setSelectedSpanIndex] = useAtom(selectedSpanIndexAtom)
 	const [selectedServiceLogIndex, setSelectedServiceLogIndex] = useAtom(selectedServiceLogIndexAtom)
+	const [selectedTheme, setSelectedTheme] = useAtom(selectedThemeAtom)
 	const [selectedTraceIndex, setSelectedTraceIndex] = useAtom(selectedTraceIndexAtom)
 	const [selectedTraceService, setSelectedTraceService] = useAtom(selectedTraceServiceAtom)
 	const [detailView, setDetailView] = useAtom(detailViewAtom)
@@ -70,12 +73,12 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const spanNavActive = detailView !== "service-logs" && selectedSpanIndex !== null
 	const serviceLogNavActive = detailView === "service-logs"
 
-	const stateRef = useRef({ traceState, serviceLogState, selectedTraceIndex, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, ...params })
+	const stateRef = useRef({ traceState, serviceLogState, selectedServiceLogIndex, selectedTheme, selectedTraceIndex, selectedSpanIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, ...params })
 	// Keep the keyboard handler's state mirror in sync before the next paint.
 	// OpenTUI's own effect-event helper uses useLayoutEffect for this same reason:
 	// rapid repeated keypresses can otherwise observe stale selection state.
 	useLayoutEffect(() => {
-		stateRef.current = { traceState, serviceLogState, selectedTraceIndex, selectedSpanIndex, selectedServiceLogIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, ...params }
+		stateRef.current = { traceState, serviceLogState, selectedServiceLogIndex, selectedTheme, selectedTraceIndex, selectedSpanIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, ...params }
 	})
 
 	const clearPendingG = () => {
@@ -401,6 +404,12 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			const nextMode = modes[(modes.indexOf(s.traceSort) + 1) % modes.length] ?? "recent"
 			setTraceSort(nextMode)
 			s.flashNotice(`Sort: ${nextMode}`)
+			return
+		}
+		if (key.name === "t") {
+			const nextTheme = cycleThemeName(s.selectedTheme)
+			setSelectedTheme(nextTheme)
+			s.flashNotice(`Theme: ${themeLabel(nextTheme)}`)
 			return
 		}
 		if (key.name === "/" && !key.shift) {

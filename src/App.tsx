@@ -1,4 +1,4 @@
-import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
+import { RGBA, TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
 import { useAtom } from "@effect/atom-react"
 import { useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
@@ -7,14 +7,16 @@ import { Divider, FooterHints, HelpModal, PlainLine, SplitDivider, TextLine } fr
 import { useAppLayout } from "./ui/app/useAppLayout.ts"
 import { useTraceScreenData } from "./ui/app/useTraceScreenData.ts"
 import { TraceWorkspace } from "./ui/app/TraceWorkspace.tsx"
-import { noticeAtom } from "./ui/state.ts"
-import { colors, SEPARATOR } from "./ui/theme.ts"
+import { noticeAtom, persistSelectedTheme, selectedThemeAtom } from "./ui/state.ts"
+import { applyTheme, colors, SEPARATOR, themeLabel } from "./ui/theme.ts"
 import { getVisibleSpans } from "./ui/Waterfall.tsx"
 import { useKeyboardNav } from "./ui/useKeyboardNav.ts"
 
 export const App = () => {
 	const { width, height } = useTerminalDimensions()
 	const [notice, setNotice] = useAtom(noticeAtom)
+	const [selectedTheme] = useAtom(selectedThemeAtom)
+	applyTheme(selectedTheme)
 	const {
 		traceState,
 		traceDetailState,
@@ -76,6 +78,10 @@ export const App = () => {
 			clearTimeout(noticeTimeoutRef.current)
 		}
 	}, [setNotice])
+
+	useEffect(() => {
+		persistSelectedTheme(selectedTheme)
+	}, [selectedTheme])
 
 	useLayoutEffect(() => {
 		const box = traceListScrollRef.current
@@ -156,7 +162,7 @@ export const App = () => {
 	const showSplit = isWideLayout
 
 	return (
-		<box flexGrow={1} flexDirection="column">
+		<box width={width ?? 100} height={height ?? 24} flexGrow={1} flexDirection="column" backgroundColor={RGBA.fromHex(colors.screenBg)}>
 			<box paddingLeft={1} paddingRight={1} flexDirection="column">
 				<TextLine>
 					<span fg={colors.muted} attributes={TextAttributes.BOLD}>MOTEL</span>
@@ -205,7 +211,7 @@ export const App = () => {
 					</box>
 				</>
 			) : null}
-			{showHelp ? <HelpModal width={width ?? 100} height={height ?? 24} autoRefresh={autoRefresh} onClose={() => setShowHelp(false)} /> : null}
+			{showHelp ? <HelpModal width={width ?? 100} height={height ?? 24} autoRefresh={autoRefresh} themeLabel={themeLabel(selectedTheme)} onClose={() => setShowHelp(false)} /> : null}
 		</box>
 	)
 }

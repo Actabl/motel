@@ -1,16 +1,43 @@
 #!/usr/bin/env bun
 
+import { Effect } from "effect"
+import { applyManagedDaemonEnv, ensureManagedDaemon, getManagedDaemonStatus, stopManagedDaemon } from "./daemon.js"
+
 const [command, ...args] = process.argv.slice(2)
+
+const run = <A>(effect: Effect.Effect<A, Error>) => Effect.runPromise(effect)
 
 switch (command) {
 case undefined:
 case "tui":
 case "ui": {
+	await run(applyManagedDaemonEnv)
+	await run(ensureManagedDaemon)
 	await import("./index.js")
 	break
 }
 
+case "daemon":
+case "start": {
+	const status = await run(ensureManagedDaemon)
+	console.log(JSON.stringify(status, null, 2))
+	break
+}
+
+case "status": {
+	const status = await run(getManagedDaemonStatus)
+	console.log(JSON.stringify(status, null, 2))
+	break
+}
+
+case "stop": {
+	const status = await run(stopManagedDaemon)
+	console.log(JSON.stringify(status, null, 2))
+	break
+}
+
 case "server": {
+	await run(applyManagedDaemonEnv)
 	await import("./server.js")
 	break
 }
@@ -26,6 +53,9 @@ case "-h": {
 	console.log(`Usage:
 	motel
 	motel tui
+	motel daemon
+	motel status
+	motel stop
 	motel server
 	motel mcp
 	motel services
@@ -48,6 +78,7 @@ case "-h": {
 }
 
 default: {
+	await run(applyManagedDaemonEnv)
 	process.argv = [process.argv[0]!, process.argv[1]!, command, ...args]
 	await import("./cli.js")
 	break

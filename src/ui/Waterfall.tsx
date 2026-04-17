@@ -161,6 +161,14 @@ const renderWaterfallBar = (
 	}
 }
 
+const durationColor = (durationMs: number) => {
+	if (durationMs >= 10_000) return colors.warning
+	if (durationMs >= 1_000) return colors.accent
+	if (durationMs >= 100) return colors.count
+	if (durationMs > 0) return colors.muted
+	return colors.muted
+}
+
 export const getWaterfallLayout = (contentWidth: number, traceDurationMs: number) => {
 	const labelMaxWidth = Math.min(Math.floor(contentWidth * 0.4), 32)
 	const durationWidth = Math.max(8, formatDuration(traceDurationMs).length + 1)
@@ -219,11 +227,10 @@ const WaterfallRow = memo(({
 	// Match the trace list indicator: `!` on error, chevron on collapsible parents, `·` on leaves.
 	const indicator = span.status === "error" ? "!" : hasChildSpans ? (collapsed ? "\u25b8" : "\u25be") : "\u00b7"
 	const opName = span.isRunning ? `${span.operationName} [${lifecycleLabel(span)}]` : span.operationName
-	// Hide sub-millisecond duration labels — zero useful info for rows that all read "0.00ms"
-	const duration = span.durationMs >= 1 ? formatDuration(span.durationMs) : ""
+	const duration = formatDuration(Math.max(0, span.durationMs))
 	const logText = logCount > 0 ? `${logCount}lg` : ""
 
-	const { labelMaxWidth, durationWidth, logWidth, barWidth } = getWaterfallLayout(contentWidth, trace.durationMs)
+	const { labelMaxWidth, logWidth, barWidth } = getWaterfallLayout(contentWidth, trace.durationMs)
 
 	const opMaxWidth = Math.max(4, labelMaxWidth - prefix.length - 2)
 	const opTruncated = opName.length > opMaxWidth ? `${opName.slice(0, opMaxWidth - 1)}\u2026` : opName
@@ -232,18 +239,16 @@ const WaterfallRow = memo(({
 
 	const isError = span.status === "error"
 	const barColor = selected ? (isError ? waterfallColors.barSelectedError : waterfallColors.barSelected) : isError ? waterfallColors.barError : waterfallColors.bar
-	const laneColor = waterfallColors.barBg
-	const { segments, afterCells } = renderWaterfallBar(span, trace, barWidth, barColor, laneColor)
+	const laneColor = selected ? waterfallColors.barLane : waterfallColors.barBg
+	const { segments } = renderWaterfallBar(span, trace, barWidth, barColor, laneColor)
 	const bg = selected ? colors.selectedBg : undefined
 	const treeColor = selected ? colors.separator : colors.treeLine
 	const indicatorColor = isError ? colors.error : hasChildSpans ? (selected ? colors.selectedText : colors.muted) : colors.passing
 	const opColor = selected ? colors.selectedText : span.isRunning ? colors.warning : colors.text
 
-	// Pad the bar to its full `barWidth` so the duration column is always at a
-	// fixed offset, matching the ruler's right-aligned end marker.
-	const barTrailingPad = " ".repeat(afterCells)
-	const durationStr = duration.padStart(durationWidth)
-	const logPad = " ".repeat(Math.max(0, logWidth - logText.length))
+	const durationStr = duration
+	const logPad = logText.length > 0 && durationStr.length > 0 ? " " : ""
+	const durationFg = durationColor(span.durationMs)
 
 	return (
 		<box height={1} onMouseDown={onSelect}>
@@ -256,9 +261,8 @@ const WaterfallRow = memo(({
 				{segments.map((segment, index) => (
 					<span key={`${span.spanId}-bar-${index}`} fg={segment.fg} bg={segment.bg}>{segment.text}</span>
 				))}
-				<span>{barTrailingPad}</span>
-				<span> </span>
-				<span fg={selected ? colors.accent : colors.count}>{durationStr}</span>
+				{durationStr ? <span> </span> : null}
+				<span fg={durationFg}>{durationStr}</span>
 				<span>{logPad}</span>
 				<span fg={logCount > 0 ? colors.defaultService : colors.muted}>{logText}</span>
 			</TextLine>
