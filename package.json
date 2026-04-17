@@ -50,6 +50,7 @@
     "daemon": "bun run src/motel.ts daemon",
     "status": "bun run src/motel.ts status",
     "stop": "bun run src/motel.ts stop",
+    "restart": "bun run src/motel.ts restart",
     "server": "bun run src/motel.ts server",
     "mcp": "bun run src/mcp.ts",
     "test": "bun test",

@@ -2,8 +2,14 @@
 
 ## Commands
 - Install deps: `bun install`
-- Run the TUI: `bun run dev` or `bun run start`
-- Run the local server only: `bun run server`
+- Run the TUI: `bun run dev` or `bun run start` (auto-ensures a managed
+  OTLP daemon is running in the background so traces ingest while the TUI
+  is up)
+- Start the background daemon only: `bun run daemon` (same as `motel start`)
+- Stop the managed daemon: `bun run stop`
+- Daemon status JSON: `bun run status`
+- Restart daemon + relaunch TUI: `bun run restart`
+- Run the local server in the foreground (no daemon, no TUI): `bun run server`
 - Run tests: `bun run test`
 - Query services via CLI: `bun run cli services`
 - Query traces via CLI: `bun run cli traces <service> [limit]`
@@ -49,11 +55,16 @@
   (pane widths, body lines, viewport rows, drill-in level).
 - `src/ui/app/TraceWorkspace.tsx` renders the drill-in state machine:
   L0 (trace list), L1 (waterfall), L2 (span detail), plus the service
-  logs side mode.
-- `src/ui/app/TraceListPane.tsx` wraps `TraceList` in a scrollbox with
-  the filter bar and list header.
-- `src/ui/TraceList.tsx` renders trace rows (trace id, duration, span
-  count, relative age).
+  logs side mode. When drilled in the list is hidden entirely and the
+  detail pane(s) expand to fill.
+- `src/ui/app/TraceListPane.tsx` hosts the trace list: header + optional
+  filter bar + virtual-windowed body (no opentui scrollbox — that had a
+  race with Yoga layout timing).
+- `src/ui/TraceList.tsx` exports `TraceListHeader` (the `TRACES 100 · ...`
+  strip) and `TraceListBody` (virtual-windowed rows with mouse-wheel
+  scrolling). The body owns its own scrollOffset state, preserves the
+  selected row's visual position across auto-refresh shifts, and snaps
+  the window to follow selection that moves off-screen.
 - `src/ui/Waterfall.tsx` renders the waterfall timeline with a
   virtualised scroll viewport; `src/ui/waterfallNav.ts` is the pure
   collapse/expand/walk resolver (unit-tested).
@@ -134,6 +145,7 @@
 - `tab`: toggle service logs view
 - `[` / `]`: switch services
 - `s`: cycle sort mode (recent → slowest → errors)
+- `t`: cycle theme (motel-default → tokyo-night → catppuccin)
 - `/`: enter filter mode (type to match on root operation name; `:error` restricts to failing traces)
 - `f`: open attribute filter picker (browse span-attribute keys → values for the current service; `backspace` walks back to keys; `esc` in the trace list clears the active filter)
 - `a`: pause or resume auto-refresh

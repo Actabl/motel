@@ -36,6 +36,17 @@ case "stop": {
 	break
 }
 
+case "restart": {
+	// Stop any running managed daemon, then start a fresh one + launch the
+	// TUI. Handy during local development when you've rebuilt the server
+	// and want the TUI to reconnect to the new binary in one command.
+	await run(stopManagedDaemon)
+	await run(applyManagedDaemonEnv)
+	await run(ensureManagedDaemon)
+	await import("./index.js")
+	break
+}
+
 case "server": {
 	await run(applyManagedDaemonEnv)
 	await import("./server.js")
@@ -56,6 +67,7 @@ case "-h": {
 	motel daemon
 	motel status
 	motel stop
+	motel restart
 	motel server
 	motel mcp
 	motel services
