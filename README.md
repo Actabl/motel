@@ -84,6 +84,14 @@ http://127.0.0.1:27686/docs
 
 So yes: another service has to point its OTEL exporters at this local motel instance.
 
+## Privacy Note
+
+`motel` is a local observability tool, and it can store sensitive telemetry content if the upstream app emits it.
+
+- correlated logs may include secrets, tokens, or PII if your app logs them
+- AI call data may include prompt previews, response previews, full prompt content, response text, tool metadata, and provider metadata
+- treat the local SQLite store as sensitive development data when using motel against real workloads
+
 The easiest flow is:
 
 1. Run `bun run dev` here. That starts the local server if needed and then launches the TUI.

@@ -1,5 +1,5 @@
 import { useAtom } from "@effect/atom-react"
-import { useKeyboard } from "@opentui/react"
+import { useKeyboard, useRenderer } from "@opentui/react"
 import { useLayoutEffect, useRef } from "react"
 import type { TraceItem, TraceSummaryItem } from "../domain.ts"
 import { otelServerInstructions } from "../instructions.ts"
@@ -45,6 +45,7 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		spanPageSize,
 		flashNotice,
 	} = params
+	const renderer = useRenderer()
 
 	const [traceState] = useAtom(traceStateAtom)
 	const [serviceLogState] = useAtom(serviceLogStateAtom)
@@ -63,6 +64,7 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 
 	const pendingGRef = useRef(false)
 	const pendingGTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+	const quittingRef = useRef(false)
 
 	const spanNavActive = detailView !== "service-logs" && selectedSpanIndex !== null
 	const serviceLogNavActive = detailView === "service-logs"
@@ -259,7 +261,13 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		clearPendingG()
 
 		if (key.name === "q" || (key.ctrl && key.name === "c")) {
-			process.exit(0)
+			if (quittingRef.current) return
+			quittingRef.current = true
+			renderer.once("destroy", () => {
+				process.exit(0)
+			})
+			renderer.destroy()
+			return
 		}
 		if (key.name === "home") {
 			if (s.serviceLogNavActive) {

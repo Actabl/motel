@@ -683,3 +683,17 @@ export const ensureLocalServer = async () => {
 	}
 	return await startLocalServer()
 }
+
+export const stopLocalServer = () => {
+	server?.stop(true)
+	server = null
+	startedAt = null
+
+	const dispose = disposeWebHandler
+	disposeWebHandler = null
+	if (dispose) {
+		void dispose().catch((err) => {
+			console.warn(`motel: failed to dispose web handler: ${(err as Error).message}`)
+		})
+	}
+}
