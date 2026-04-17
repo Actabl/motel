@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "description": "A local OpenTelemetry ingest + TUI viewer for development, backed by SQLite.",
   "type": "module",
-  "private": true,
   "license": "MIT",
   "author": "Kit Langton",
   "repository": {
@@ -25,6 +24,19 @@
     "opentui"
   ],
   "workspaces": ["web"],
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "web/dist",
+    "LICENSE",
+    "README.md",
+    "AGENTS.md"
+  ],
   "bin": {
     "motel": "src/motel.ts",
     "motel-mcp": "src/mcp.ts"
@@ -52,7 +64,8 @@
     "log-stats": "bun run src/cli.ts log-stats",
     "web:dev": "cd web && npx vite",
     "web:build": "cd web && npx vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run web:build"
   },
   "devDependencies": {
     "@types/bun": "^1.3.12",
