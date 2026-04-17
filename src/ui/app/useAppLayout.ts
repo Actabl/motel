@@ -31,9 +31,10 @@ export const useAppLayout = ({ width, height, notice, detailView, selectedSpanIn
 	// Left pane: paddingLeft (1) + scrollbar column (1). No right padding —
 	// the vertical pane divider handles visual separation from the right pane.
 	const leftContentWidth = isWideLayout ? Math.max(24, leftPaneWidth - 2) : Math.max(24, contentWidth - sectionPadding * 2)
-	// Right pane keeps only left padding; the vertical pane divider on the
-	// right provides enough visual separation without a trailing blank column.
-	const rightContentWidth = isWideLayout ? Math.max(24, rightPaneWidth - sectionPadding) : Math.max(24, contentWidth - sectionPadding * 2)
+	// Right pane: both left and right padding. Trace details and span detail
+	// content needs a little breathing room on the right so long op names
+	// and the duration column don't butt against the pane border.
+	const rightContentWidth = isWideLayout ? Math.max(24, rightPaneWidth - sectionPadding * 2) : Math.max(24, contentWidth - sectionPadding * 2)
 	const headerFooterWidth = Math.max(24, contentWidth - 2)
 	const wideBodyHeight = availableContentHeight
 	// TraceDetailsPane + SpanDetailPane both reserve 4 rows for their header

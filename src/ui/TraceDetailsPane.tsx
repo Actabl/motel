@@ -89,12 +89,12 @@ export const TraceDetailsPane = ({
 
 	return (
 		<box flexDirection="column" width={paneWidth} height={bodyLines + TRACE_DETAILS_HEADER_ROWS} overflow="hidden">
-			<box paddingLeft={1} paddingRight={0}>
+			<box paddingLeft={1} paddingRight={1}>
 				<AlignedHeaderLine left={headerTitle} right={headerRight} width={contentWidth} rightFg={headerColor} />
 			</box>
 			{trace ? (
 				<>
-					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 						<TextLine>
 							<span>{opLeft}</span>
 							<span>{" ".repeat(opGap)}</span>
@@ -111,7 +111,7 @@ export const TraceDetailsPane = ({
 						</TextLine>
 					</box>
 					<Divider width={paneWidth} />
-					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 						<WaterfallTimeline
 							trace={trace}
 							filteredSpans={filteredSpans}
@@ -127,7 +127,7 @@ export const TraceDetailsPane = ({
 				</>
 			) : isLoadingTrace && traceMeta ? (
 				<>
-					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 						<TextLine>
 							<span>{opLeft}</span>
 							<span>{" ".repeat(opGap)}</span>
@@ -140,16 +140,16 @@ export const TraceDetailsPane = ({
 						</TextLine>
 					</box>
 					<Divider width={paneWidth} />
-					<box flexDirection="column" paddingLeft={1} paddingRight={0}>
+					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 						<PlainLine text="Loading trace details..." fg={colors.count} />
 					</box>
 				</>
 			) : hasTraceSelection && traceStatus === "error" ? (
-				<box flexDirection="column" paddingLeft={1} paddingRight={0}>
+				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 					<PlainLine text={traceError ?? "Could not load trace."} fg={colors.error} />
 				</box>
 			) : (
-				<box flexDirection="column" paddingLeft={1} paddingRight={0}>
+				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 					<PlainLine text="No trace selected. Use j/k in the trace list." fg={colors.muted} />
 				</box>
 			)}
