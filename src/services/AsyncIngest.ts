@@ -20,7 +20,7 @@
  */
 
 import * as BunWorker from "@effect/platform-bun/BunWorker"
-import { Context, Effect, Layer, Scope } from "effect"
+import { Context, Effect, Exit, Layer, Scope } from "effect"
 import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
@@ -50,19 +50,38 @@ const WorkerProtocol = RpcClient.layerProtocolWorker({ size: 1 }).pipe(
 export const AsyncIngestLive = Layer.effect(
 	AsyncIngest,
 	Effect.gen(function*() {
-		const scope = yield* Scope.Scope
-		// Keep daemon startup cheap: creating the RPC client here would eagerly
-		// spawn the worker and make /api/health wait on the worker's SQLite
-		// bootstrap. Cache a lazy initializer instead so the worker only starts
-		// on the first ingest request, but is still shared thereafter.
-		const getClient = yield* RpcClient.make(IngestRpcs).pipe(
-			Effect.provide(WorkerProtocol),
-			Effect.cached,
+		const serviceScope = yield* Scope.Scope
+
+		const getClient = yield* Effect.cached(
+			Effect.gen(function*() {
+				const workerScope = yield* Scope.make()
+				const closeWorkerScope = Scope.close(workerScope, Exit.void)
+
+				const client = yield* Effect.gen(function*() {
+					// Keep the worker protocol and the RpcClient's background fibers
+					// in one dedicated child scope that lives until AsyncIngest shuts down.
+					const protocolContext = yield* Layer.buildWithScope(WorkerProtocol, workerScope)
+					const protocol = Context.get(protocolContext, RpcClient.Protocol)
+					return yield* RpcClient.make(IngestRpcs).pipe(
+						Effect.provideService(RpcClient.Protocol, protocol),
+						Effect.provideService(Scope.Scope, workerScope),
+					)
+				}).pipe(
+					Effect.catchCause((cause) =>
+						Effect.flatMap(closeWorkerScope, () => Effect.failCause(cause)),
+					),
+				)
+
+				yield* Scope.addFinalizer(serviceScope, closeWorkerScope)
+				return client
+			}),
 		)
-		const withScope = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.provideService(effect, Scope.Scope, scope)
+
 		return {
-			ingestTraces: (input, options) => Effect.flatMap(withScope(getClient), (client) => client.ingestTraces(input, options)),
-			ingestLogs: (input, options) => Effect.flatMap(withScope(getClient), (client) => client.ingestLogs(input, options)),
+			ingestTraces: (input, options) =>
+				Effect.flatMap(getClient, (client) => client.ingestTraces(input, options)),
+			ingestLogs: (input, options) =>
+				Effect.flatMap(getClient, (client) => client.ingestLogs(input, options)),
 		}
 	}),
 )
