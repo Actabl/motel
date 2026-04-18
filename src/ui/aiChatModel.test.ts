@@ -328,6 +328,50 @@ describe("buildChatListRows", () => {
 		expect(rows[0]!.text).toBe("hello there")
 		expect(rows[1]!.text).toContain("bash")
 	})
+
+	it("uses matching tool-call context for tool-result rows", () => {
+		const chunks = buildChunks(
+			makeDetail([
+				{
+					role: "assistant",
+					content: [
+						{ type: "tool-call", toolCallId: "tc-1", toolName: "bash", input: { command: "git status --short --branch" } },
+					],
+				},
+				{
+					role: "tool",
+					content: [
+						{ type: "tool-result", toolCallId: "tc-1", toolName: "bash", output: { type: "text", value: "## dev...origin/dev [ahead 8, behind 11]\n M src/file.ts" } },
+					],
+				},
+			]),
+		)
+		const rows = buildChatListRows(chunks).filter((r) => r.kind === "chunk")
+		expect(rows[1]!.text).toContain("bash  git status --short --branch")
+		expect(rows[1]!.meta).toContain("## dev...origin/dev")
+	})
+
+	it("shows read result rows with the originating file path inline", () => {
+		const chunks = buildChunks(
+			makeDetail([
+				{
+					role: "assistant",
+					content: [
+						{ type: "tool-call", toolCallId: "tc-2", toolName: "read", input: { filePath: "/src/formatter.ts", offset: 40, limit: 80 } },
+					],
+				},
+				{
+					role: "tool",
+					content: [
+						{ type: "tool-result", toolCallId: "tc-2", toolName: "read", output: { type: "text", value: "1: export const x = 1" } },
+					],
+				},
+			]),
+		)
+		const rows = buildChatListRows(chunks).filter((r) => r.kind === "chunk")
+		expect(rows[1]!.text).toContain("read  /src/formatter.ts @40 +80")
+		expect(rows[1]!.meta).toContain("1: export const x = 1")
+	})
 })
 
 describe("chunkDetailTitle + renderChunkDetailLines", () => {

@@ -479,6 +479,13 @@ const firstBodyLine = (body: string) => {
 	return line.replace(/\s+/g, " ").trim()
 }
 
+const stripTransportGlyph = (text: string) => text.replace(/^[→←]\s+/, "")
+
+const toolRowPreview = (text: string, width = 40) => {
+	const compact = firstBodyLine(text)
+	return compact.length > 0 ? shorten(compact, width) : null
+}
+
 /**
  * Stable list rows for the main chat pane. One role divider per turn,
  * one selectable row per chunk. Plain text chunks use their first body
@@ -487,6 +494,10 @@ const firstBodyLine = (body: string) => {
  */
 export const buildChatListRows = (chunks: readonly Chunk[]): readonly ChatListRow[] => {
 	const rows: ChatListRow[] = []
+	const toolCallById = new Map<string, Chunk>()
+	for (const chunk of chunks) {
+		if (chunk.kind === "tool-call" && chunk.toolCallId) toolCallById.set(chunk.toolCallId, chunk)
+	}
 	let prevRole: Role | null = null
 	let prevMessageIndex = -1
 
@@ -522,7 +533,33 @@ export const buildChatListRows = (chunks: readonly Chunk[]): readonly ChatListRo
 		// structured chunk headers here. Otherwise tool rows render as
 		// `→ → bash ...` and results as `← ← read ...`.
 		if (chunk.kind === "tool-call" || chunk.kind === "tool-result") {
-			text = text.replace(/^[→←]\s+/, "")
+			text = stripTransportGlyph(text)
+		}
+
+		if (chunk.kind === "tool-call") {
+			const preview = toolRowPreview(chunk.body)
+			// Keep row text focused on the primary action (already encoded in
+			// `header`) and use the dim right column for "there is more here"
+			// metadata only when it adds signal. For JSON-heavy tool args this
+			// is usually just noise, so we currently leave meta alone.
+			if (preview && preview !== text) {
+				meta = meta ?? null
+			}
+		}
+
+		if (chunk.kind === "tool-result") {
+			const matchingCall = chunk.toolCallId ? toolCallById.get(chunk.toolCallId) ?? null : null
+			if (matchingCall) {
+				// Carry the originating call summary into the result row so the
+				// list can answer "result of what?" without opening the modal.
+				// Example: `← bash  git status --short --branch`,
+				// `← read  /src/formatter.ts @40 +80`.
+				text = stripTransportGlyph(matchingCall.header)
+			}
+			const preview = toolRowPreview(chunk.body)
+			if (preview) {
+				meta = chunk.headerMeta ? `${chunk.headerMeta} · ${preview}` : preview
+			}
 		}
 		if (chunk.kind === "system") {
 			text = "prompt"

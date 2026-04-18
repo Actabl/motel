@@ -48,6 +48,15 @@ const rowTextColor = (chunk: Chunk | null, role: Role, selected: boolean): strin
 	return colors.text
 }
 
+const splitToolRowText = (text: string): { readonly head: string; readonly tail: string | null } => {
+	const sep = text.indexOf("  ")
+	if (sep < 0) return { head: text, tail: null }
+	return {
+		head: text.slice(0, sep),
+		tail: text.slice(sep + 2),
+	}
+}
+
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
 
 const chunkRows = (rows: readonly ChatListRow[]) => rows.filter((row) => row.kind === "chunk")
@@ -264,11 +273,16 @@ export const AiChatView = ({
 						const textWidth = Math.max(8, contentWidth - prefix.length - meta.length - 4)
 						const display = truncateText(row.text, textWidth)
 						const gap = Math.max(1, contentWidth - prefix.length - display.length - meta.length - 1)
+						const toolLike = chunk?.kind === "tool-call" || chunk?.kind === "tool-result"
+						const { head, tail } = toolLike ? splitToolRowText(display) : { head: display, tail: null }
+						const headColor = rowTextColor(chunk, row.role, isSelected)
+						const tailColor = isSelected ? colors.muted : colors.separator
 						return (
 							<box key={`row-${offset + i}`} height={1} onMouseDown={() => { if (row.chunkId) onSelectChunk(row.chunkId) }}>
 								<TextLine bg={isSelected ? colors.selectedBg : undefined}>
 									<span fg={isSelected ? roleColor(row.role) : colors.separator}>{isSelected ? "▎" : " "}</span>
-									<span fg={rowTextColor(chunk, row.role, isSelected)} attributes={isSelected ? TextAttributes.BOLD : undefined}>{prefix}{display}</span>
+									<span fg={headColor} attributes={isSelected ? TextAttributes.BOLD : undefined}>{`${prefix}${head}`}</span>
+									{tail ? <span fg={tailColor}>{`  ${tail}`}</span> : null}
 									{meta ? <><span fg={colors.muted}>{" ".repeat(gap)}</span><span fg={colors.muted}>{meta}</span></> : null}
 								</TextLine>
 							</box>
