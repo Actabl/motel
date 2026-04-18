@@ -3,6 +3,15 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect, Layer, ManagedRuntime } from "effect"
+import { decodeLogExportRequestFromProtobuf, decodeTraceExportRequestFromProtobuf } from "../otlpProtobuf.js"
+
+import otlpRootModule = require("@opentelemetry/otlp-transformer/build/src/generated/root")
+
+const otlpRoot = otlpRootModule as any
+const traceRequestType = otlpRoot.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
+const logRequestType = otlpRoot.opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest
+
+const hexToBytes = (hex: string): Uint8Array => Uint8Array.from(Buffer.from(hex, "hex"))
 
 describe("AsyncIngest", () => {
 	let tempDir: string
@@ -63,5 +72,57 @@ describe("AsyncIngest", () => {
 		)
 
 		expect(result.insertedSpans).toBe(1)
+	})
+
+	it("ingests protobuf-normalized traces and logs through the worker client", async () => {
+		const nowNanos = BigInt(Date.now()) * 1_000_000n
+
+		const tracePayload = decodeTraceExportRequestFromProtobuf(traceRequestType.encode({
+			resourceSpans: [{
+				resource: {
+					attributes: [{ key: "service.name", value: { stringValue: "async-protobuf-test" } }],
+				},
+				scopeSpans: [{
+					scope: { name: "test-scope" },
+					spans: [{
+						traceId: hexToBytes("cccccccccccccccccccccccccccccccc"),
+						spanId: hexToBytes("dddddddddddddddd"),
+						name: "async.protobuf.trace",
+						kind: 2,
+						startTimeUnixNano: String(nowNanos),
+						endTimeUnixNano: String(nowNanos + 1_000_000n),
+					}],
+				}],
+			}],
+		}).finish() as Uint8Array)
+
+		const logPayload = decodeLogExportRequestFromProtobuf(logRequestType.encode({
+			resourceLogs: [{
+				resource: {
+					attributes: [{ key: "service.name", value: { stringValue: "async-protobuf-test" } }],
+				},
+				scopeLogs: [{
+					scope: { name: "test-scope" },
+					logRecords: [{
+						timeUnixNano: String(nowNanos + 500_000n),
+						severityText: "INFO",
+						body: { stringValue: "worker log" },
+						traceId: hexToBytes("cccccccccccccccccccccccccccccccc"),
+						spanId: hexToBytes("dddddddddddddddd"),
+					}],
+				}],
+			}],
+		}).finish() as Uint8Array)
+
+		const result = await runtime.runPromise(
+			Effect.flatMap(AsyncIngest.asEffect(), (ingest) =>
+				Effect.flatMap(
+					ingest.ingestTraces({ payload: tracePayload }),
+					() => ingest.ingestLogs({ payload: logPayload }),
+				),
+			),
+		)
+
+		expect(result.insertedLogs).toBe(1)
 	})
 })
