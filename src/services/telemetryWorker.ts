@@ -4,7 +4,7 @@
  * Spawned by the main process via `new Worker(new URL("./telemetryWorker.ts", import.meta.url))`.
  * This file runs inside a Bun Worker, so anything it imports is
  * evaluated in a FRESH module graph on the worker side. In particular
- * `TelemetryStoreLive` opens its own SQLite connection here — the main
+ * `TelemetryStoreWorkerLive` opens its own SQLite connection here — the main
  * thread's store connection is unrelated. SQLite's WAL journal mode
  * lets both connections coexist against the same `.sqlite` file: the
  * worker writes, the main thread reads, and neither blocks the other.
@@ -24,7 +24,7 @@ import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as RpcServer from "effect/unstable/rpc/RpcServer"
 import type { OtlpLogExportRequest, OtlpTraceExportRequest } from "../otlp.ts"
 import { IngestError, IngestRpcs } from "./ingestRpc.ts"
-import { TelemetryStore, TelemetryStoreLive } from "./TelemetryStore.ts"
+import { TelemetryStore, TelemetryStoreWorkerLive } from "./TelemetryStore.ts"
 
 // Wire the two RPC methods to the existing TelemetryStore service.
 // The store's ingest methods already carry their own Effect.fn spans,
@@ -50,7 +50,7 @@ const IngestHandlers = IngestRpcs.toLayer(
 
 const WorkerLive = RpcServer.layer(IngestRpcs).pipe(
 	Layer.provide(IngestHandlers),
-	Layer.provide(TelemetryStoreLive),
+	Layer.provide(TelemetryStoreWorkerLive),
 	Layer.provide(RpcServer.layerProtocolWorkerRunner),
 	Layer.provide(RpcSerialization.layerMsgPack),
 	Layer.provide(BunWorkerRunner.layer),

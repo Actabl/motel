@@ -447,26 +447,74 @@ export class TelemetryStore extends Context.Service<
 >()("motel/TelemetryStore") {}
 
 
-export const TelemetryStoreLive = Layer.effect(
+/**
+ * How this TelemetryStore instance behaves:
+ *
+ * - `readonly` — opens the SQLite connection read-only and skips every
+ *   DDL/DML initialisation. Use this from the TUI (and anywhere else
+ *   that only queries); it avoids the "database is locked" race that
+ *   happens when a TUI process races a daemon's writer for the schema
+ *   pragmas on startup. Writes through the service interface become
+ *   runtime errors — but readers don't call them.
+ *
+ * - `runRetention` — fork the background cleanup loop (age + size cap
+ *   eviction, WAL checkpoint). Only one process should own this at a
+ *   time. Currently the main daemon (localServer) does; the ingest
+ *   worker and the TUI skip it.
+ */
+export interface TelemetryStoreOptions {
+	readonly readonly: boolean
+	readonly runRetention: boolean
+}
+
+export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.effect(
 	TelemetryStore,
 	Effect.gen(function* () {
 		mkdirSync(dirname(config.otel.databasePath), { recursive: true })
 		const db = yield* Effect.acquireRelease(
-			Effect.sync(() => new Database(config.otel.databasePath, { create: true })),
+			Effect.sync(() => new Database(config.otel.databasePath, {
+				create: !opts.readonly,
+				readonly: opts.readonly,
+			})),
 			(db) => Effect.sync(() => {
-				// `PRAGMA optimize` at close persists any stats SQLite gathered
-				// during the session, so the next process start gets an accurate
-				// query planner on the first query instead of a 3-second cold
-				// run. Cheap: it skips work unless stats have drifted.
-				try { db.exec(`PRAGMA optimize;`) } catch { /* nothing */ }
+				if (!opts.readonly) {
+					// `PRAGMA optimize` at close persists any stats SQLite gathered
+					// during the session, so the next process start gets an accurate
+					// query planner on the first query instead of a 3-second cold
+					// run. Cheap: it skips work unless stats have drifted.
+					try { db.exec(`PRAGMA optimize;`) } catch { /* nothing */ }
+				}
 				db.close()
 			}),
 		)
+		if (opts.readonly) {
+			// Readonly connections skip schema init entirely — the schema
+			// already exists (a writer created it) and any `CREATE TABLE IF
+			// NOT EXISTS` / `PRAGMA journal_mode = WAL` statement would
+			// attempt a write and fight the daemon for the write lock.
+			// `query_only = 1` logically blocks any DML the app might
+			// accidentally send; still bump cache + mmap since those are
+			// safe and keep queries fast.
+			db.exec(`
+				PRAGMA query_only = 1;
+				PRAGMA busy_timeout = 15000;
+				PRAGMA cache_size = -65536;
+				PRAGMA mmap_size = 268435456;
+			`)
+		} else {
 		db.exec(`
 			PRAGMA journal_mode = WAL;
 			PRAGMA synchronous = NORMAL;
 			PRAGMA temp_store = MEMORY;
-			PRAGMA busy_timeout = 5000;
+			-- Longer busy timeout: the ingest worker holds the write lock
+			-- for up to a few seconds during big OTLP batches, and the main
+			-- daemon's retention passes can do the same. 15s gives either
+			-- side enough slack to serialise instead of erroring.
+			PRAGMA busy_timeout = 15000;
+			-- WAL checkpoint automatically when it grows past ~16MB. Without
+			-- this the WAL happily runs into the hundreds of MB and queries
+			-- start paying the cost of walking the WAL on every read.
+			PRAGMA wal_autocheckpoint = 4000;
 			-- Bump cache above the 2MB default. 64MB fits most hot index pages
 			-- (trace_summaries, spans, span_attributes indexes) in RAM even on
 			-- multi-GB databases, cutting cold-read latency meaningfully on
@@ -556,8 +604,26 @@ export const TelemetryStoreLive = Layer.effect(
 			CREATE INDEX IF NOT EXISTS idx_log_attributes_key_value ON log_attributes(key, value, log_id);
 			CREATE INDEX IF NOT EXISTS idx_log_attributes_log_id ON log_attributes(log_id);
 		`)
+		}
 
+		// Tables detected at runtime. For writer connections these flags are
+		// set by the FTS `CREATE VIRTUAL TABLE IF NOT EXISTS` try/catch; for
+		// readonly connections we probe `sqlite_master` and set them based on
+		// what the writer has already provisioned.
 		let hasFts = true
+		let hasAttrFts = true
+		if (opts.readonly) {
+			try {
+				const row = db.query(`SELECT name FROM sqlite_master WHERE type='table' AND name='span_operation_fts'`).get()
+				hasFts = row !== null
+			} catch { hasFts = false }
+			try {
+				const row = db.query(`SELECT name FROM sqlite_master WHERE type='table' AND name='span_attr_fts'`).get()
+				hasAttrFts = row !== null
+			} catch { hasAttrFts = false }
+		}
+
+		if (!opts.readonly) {
 		try {
 			db.exec(`
 				CREATE VIRTUAL TABLE IF NOT EXISTS span_operation_fts USING fts5(
@@ -589,7 +655,6 @@ export const TelemetryStoreLive = Layer.effect(
 		// Keys are inlined into the trigger DDL rather than looked up in a
 		// side table so the `WHEN` guard stays constant-cost (a subquery
 		// would run on every span_attributes insert — ~60/span).
-		let hasAttrFts = hasFts
 		if (hasFts) {
 			try {
 				const keyList = AI_FTS_KEYS.map((k) => `'${k.replace(/'/g, "''")}'`).join(", ")
@@ -661,6 +726,7 @@ export const TelemetryStoreLive = Layer.effect(
 			// ANALYZE / optimize failures are never fatal — queries still work,
 			// they just run with default row estimates.
 		}
+		} // end: if (!opts.readonly) writer init
 
 		const insertSpan = db.query(`
 			INSERT INTO spans (
@@ -708,8 +774,14 @@ export const TelemetryStoreLive = Layer.effect(
 			GROUP BY trace_id
 		`)
 
-		db.query(`DELETE FROM trace_summaries`).run()
-		rebuildTraceSummaries.run()
+		// One-time full rebuild of the trace_summaries table at open so
+		// any drift from interrupted ingests gets reconciled. Writer-only
+		// because the DELETE + INSERT would fail on a readonly connection
+		// (and would fight the daemon's writer for the lock anyway).
+		if (!opts.readonly) {
+			db.query(`DELETE FROM trace_summaries`).run()
+			rebuildTraceSummaries.run()
+		}
 
 		const deleteSpanAttributes = db.query(`DELETE FROM span_attributes WHERE trace_id = ? AND span_id = ?`)
 		const insertSpanAttribute = db.query(`INSERT INTO span_attributes (trace_id, span_id, key, value) VALUES (?, ?, ?, ?)`)
@@ -792,28 +864,55 @@ export const TelemetryStoreLive = Layer.effect(
 				} catch {
 					// FTS table may not exist on old DBs.
 				}
+
+				// Truncate the WAL after a big delete pass. Without this the
+				// WAL keeps growing (observed: 640MB) because wal_autocheckpoint
+				// only triggers when WAL pages exceed the threshold during
+				// writes — a retention pass that evicts millions of rows can
+				// blow far past that before the auto-checkpoint fires. Using
+				// PASSIVE so active readers aren't interrupted; if the WAL
+				// can't be fully reclaimed right now, we'll try again next
+				// cycle.
+				try { db.exec(`PRAGMA wal_checkpoint(PASSIVE);`) } catch { /* ignore */ }
+
+				// Incremental vacuum reclaims some of the freed pages back
+				// to the OS so the file size actually shrinks over time
+				// instead of just growing the freelist. Bounded to 2000
+				// pages per pass (≈8MB) to avoid a long-running transaction.
+				try { db.exec(`PRAGMA incremental_vacuum(2000);`) } catch { /* ignore */ }
 			})
 		})
 
-		// Run cleanup every 60 seconds in the background, tied to the layer's scope
-		yield* Effect.forkScoped(Effect.repeat(cleanupExpired(), Schedule.spaced("60 seconds")))
+		// Retention only runs in processes that opt in (currently the main
+		// daemon). The ingest worker and TUI skip it to avoid two writers
+		// competing for the write lock with overlapping DELETE passes.
+		if (opts.runRetention) {
+			// Enable incremental vacuum so retention can reclaim freed
+			// pages over time instead of needing a stop-the-world VACUUM.
+			// Idempotent: repeat calls after the first are no-ops.
+			try { db.exec(`PRAGMA auto_vacuum = INCREMENTAL;`) } catch { /* ignore */ }
 
-		// Periodically refresh query planner stats. `PRAGMA optimize` is a
-		// no-op when nothing has changed, so this is essentially free on idle
-		// servers and keeps facet/search planner estimates accurate as data
-		// grows. 15 minutes is slower than ingestion rates we care about but
-		// frequent enough that the attribute picker stays snappy.
-		const refreshPlannerStats = Effect.sync(() => {
-			try { db.exec(`PRAGMA optimize;`) } catch { /* ignore */ }
-		})
-		yield* Effect.forkScoped(Effect.repeat(refreshPlannerStats, Schedule.spaced("15 minutes")))
+			// Run cleanup every 60 seconds in the background, tied to the layer's scope
+			yield* Effect.forkScoped(Effect.repeat(cleanupExpired(), Schedule.spaced("60 seconds")))
+
+			// Periodically refresh query planner stats. `PRAGMA optimize` is a
+			// no-op when nothing has changed, so this is essentially free on idle
+			// servers and keeps facet/search planner estimates accurate as data
+			// grows. 15 minutes is slower than ingestion rates we care about but
+			// frequent enough that the attribute picker stays snappy.
+			const refreshPlannerStats = Effect.sync(() => {
+				try { db.exec(`PRAGMA optimize;`) } catch { /* ignore */ }
+			})
+			yield* Effect.forkScoped(Effect.repeat(refreshPlannerStats, Schedule.spaced("15 minutes")))
+		}
 
 		// One-time backfill for existing DBs: if span_attr_fts is empty but
 		// span_attributes has rows with AI_FTS_KEYS, populate the index.
 		// Runs forked so server startup isn't blocked; queries hitting the
 		// FTS will just return empty until the fill lands. On a 2 GB DB with
-		// ~400 matching rows this takes ~3-8 seconds.
-		if (hasAttrFts) {
+		// ~400 matching rows this takes ~3-8 seconds. Writer-only because
+		// it does INSERT INTO ... — readonly connections would error.
+		if (hasAttrFts && !opts.readonly) {
 			const backfillAttrFts = Effect.sync(() => {
 				try {
 					const ftsCount = (db.query(`SELECT COUNT(*) AS c FROM span_attr_fts`).get() as { c: number }).c
@@ -1705,7 +1804,11 @@ export const TelemetryStoreLive = Layer.effect(
 
 		/** Builds WHERE clauses for AI call search against the spans table (aliased as s) */
 		const buildAiWhereClauses = (input: AiCallSearch | AiCallStatsSearch, cutoff: number) => {
-			const clauses: string[] = ["s.operation_name LIKE 'ai.%'", "s.start_time_ms >= ?"]
+			const clauses: string[] = [
+				"s.operation_name LIKE 'ai.%'",
+				"s.operation_name NOT LIKE 'ai.%.do%'",
+				"s.start_time_ms >= ?",
+			]
 			const params: Array<string | number> = [cutoff]
 
 			if (input.service) {
@@ -2094,3 +2197,25 @@ export const TelemetryStoreLive = Layer.effect(
 		})
 	}),
 )
+
+/**
+ * Default writer instance: the main daemon uses this. Owns schema
+ * migrations, FTS backfill, and the retention loop.
+ */
+export const TelemetryStoreLive = makeTelemetryStoreLayer({ readonly: false, runRetention: true })
+
+/**
+ * Writer instance that SKIPS retention. The ingest worker uses this
+ * so the daemon and the worker aren't both running DELETE passes at
+ * the same time (they'd just serialise behind the write lock and
+ * duplicate work).
+ */
+export const TelemetryStoreWorkerLive = makeTelemetryStoreLayer({ readonly: false, runRetention: false })
+
+/**
+ * Read-only instance for query-only processes (currently the TUI).
+ * Skips every DDL/DML statement at startup so the connection can be
+ * opened while a writer is mid-transaction without racing for the
+ * write lock. Writes through the service interface will throw.
+ */
+export const TelemetryStoreReadonlyLive = makeTelemetryStoreLayer({ readonly: true, runRetention: false })

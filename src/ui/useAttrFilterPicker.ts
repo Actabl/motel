@@ -3,16 +3,22 @@ import { useEffect } from "react"
 import {
 	attrFacetStateAtom,
 	attrPickerModeAtom,
+	ensureTraceAttributeKeys,
+	ensureTraceAttributeValues,
+	getCachedFacetKeys,
+	getCachedFacetValues,
 	initialAttrFacetState,
-	loadTraceAttributeKeys,
-	loadTraceAttributeValues,
 	selectedTraceServiceAtom,
 } from "./state.ts"
 
-// When the picker is open, load the current facet page (keys, or values for
-// a specific key) and keep it in sync with the selected service. We key the
-// effect off picker mode + service + target key so refetches happen on drill
-// in/out and when the user switches services mid-pick.
+// Drive the picker's data state from (pickerMode, service, selectedKey).
+//
+// Strategy: stale-while-revalidate. On reopen we publish whatever the
+// module-level cache has instantly (no "loading…" flash), then kick off a
+// background revalidation. The first time we see a (service, key) tuple
+// we still show `loading` so the UI has something to say. The module-level
+// caches in `state.ts` mean a service-change pre-warm can fill the cache
+// before the user ever presses `f`.
 export const useAttrFilterPicker = (selectedKey: string | null) => {
 	const [pickerMode] = useAtom(attrPickerModeAtom)
 	const [service] = useAtom(selectedTraceServiceAtom)
@@ -24,24 +30,58 @@ export const useAttrFilterPicker = (selectedKey: string | null) => {
 			return
 		}
 		let cancelled = false
-		setFacetState({ status: "loading", key: pickerMode === "values" ? selectedKey : null, data: [], error: null })
-		const load = async () => {
-			try {
-				const rows = pickerMode === "keys"
-					? await loadTraceAttributeKeys(service)
-					: selectedKey
-						? await loadTraceAttributeValues(service, selectedKey)
-						: []
-				if (cancelled) return
-				setFacetState({ status: "ready", key: pickerMode === "values" ? selectedKey : null, data: rows, error: null })
-			} catch (err) {
-				if (cancelled) return
-				setFacetState({ status: "error", key: pickerMode === "values" ? selectedKey : null, data: [], error: err instanceof Error ? err.message : String(err) })
+		const publishReady = (key: string | null, data: readonly { readonly value: string; readonly count: number }[]) => {
+			setFacetState({ status: "ready", key, data, error: null })
+		}
+		const publishLoading = (key: string | null, previous: readonly { readonly value: string; readonly count: number }[] = []) => {
+			setFacetState({ status: "loading", key, data: previous, error: null })
+		}
+		const publishError = (key: string | null, previous: readonly { readonly value: string; readonly count: number }[], err: unknown) => {
+			setFacetState({
+				status: "error",
+				key,
+				data: previous,
+				error: err instanceof Error ? err.message : String(err),
+			})
+		}
+
+		if (pickerMode === "keys") {
+			const cached = getCachedFacetKeys(service)
+			if (cached) {
+				publishReady(null, cached.data)
+			} else {
+				publishLoading(null)
 			}
+			ensureTraceAttributeKeys(service)
+				.then((entry) => {
+					if (cancelled) return
+					publishReady(null, entry.data)
+				})
+				.catch((err) => {
+					if (cancelled) return
+					publishError(null, cached?.data ?? [], err)
+				})
+		} else if (selectedKey) {
+			const cached = getCachedFacetValues(service, selectedKey)
+			if (cached) {
+				publishReady(selectedKey, cached.data)
+			} else {
+				publishLoading(selectedKey)
+			}
+			ensureTraceAttributeValues(service, selectedKey)
+				.then((entry) => {
+					if (cancelled) return
+					publishReady(selectedKey, entry.data)
+				})
+				.catch((err) => {
+					if (cancelled) return
+					publishError(selectedKey, cached?.data ?? [], err)
+				})
+		} else {
+			// values mode with no key yet — just show empty state.
+			publishReady(null, [])
 		}
-		void load()
-		return () => {
-			cancelled = true
-		}
+
+		return () => { cancelled = true }
 	}, [pickerMode, service, selectedKey, setFacetState])
 }

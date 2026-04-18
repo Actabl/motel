@@ -160,6 +160,23 @@ describe("motel telemetry store", () => {
 								},
 								{
 									traceId: "trace-ai",
+									spanId: "ai-stream-1-do",
+									parentSpanId: "ai-stream-1",
+									name: "ai.streamText.doStream",
+									kind: 1,
+									startTimeUnixNano: String(nowNanos + 21n * oneSecond),
+									endTimeUnixNano: String(nowNanos + 39n * oneSecond),
+									attributes: [
+										{ key: "ai.operationId", value: { stringValue: "ai.streamText.doStream" } },
+										{ key: "ai.telemetry.functionId", value: { stringValue: "session.llm" } },
+										{ key: "ai.model.provider", value: { stringValue: "openai.responses" } },
+										{ key: "ai.model.id", value: { stringValue: "gpt-5.4" } },
+										{ key: "ai.telemetry.metadata.sessionId", value: { stringValue: "ses_test123" } },
+										{ key: "ai.prompt.messages", value: { stringValue: '[{"role":"user","content":"Tell me a joke about programming"}]' } },
+									],
+								},
+								{
+									traceId: "trace-ai",
 									spanId: "ai-tool-1",
 									parentSpanId: "ai-stream-1",
 									name: "ai.toolCall",
@@ -615,6 +632,17 @@ describe("motel telemetry store", () => {
 		expect(streamCall?.toolCallCount).toBe(1)
 		expect(streamCall?.usage?.inputTokens).toBe(150)
 		expect(streamCall?.usage?.outputTokens).toBe(42)
+	})
+
+	it("dedupes nested doStream spans from AI summaries", async () => {
+		const result = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchAiCalls({ sessionId: "ses_test123" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(result.map((call) => call.spanId)).toEqual(["ai-stream-1"])
+		expect(result.map((call) => call.spanId)).not.toContain("ai-stream-1-do")
 	})
 
 	it("filters AI calls by model", async () => {

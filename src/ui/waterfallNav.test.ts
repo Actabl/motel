@@ -6,7 +6,7 @@ import {
 	getWaterfallLayout,
 	getWaterfallSuffixMetrics,
 	getVisibleSpans,
-} from "./Waterfall.tsx"
+} from "./waterfallModel.ts"
 import { resolveCollapseStep } from "./waterfallNav.ts"
 
 // ---------------------------------------------------------------------------

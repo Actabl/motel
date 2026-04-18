@@ -1,4 +1,5 @@
 import { RGBA, TextAttributes } from "@opentui/core"
+import { Children } from "react"
 import { colors } from "./theme.ts"
 import { fitCell, truncateText } from "./format.ts"
 import type { DetailView } from "./state.ts"
@@ -19,19 +20,32 @@ export const PlainLine = ({ text, fg = colors.text, bold = false }: { text: stri
 	</box>
 )
 
-export const TextLine = ({ children, fg = colors.text, bg }: { children: React.ReactNode; fg?: string; bg?: string | undefined }) => (
-	<box height={1}>
-		{bg ? (
-			<text wrapMode="none" truncate fg={fg} bg={bg}>
-				{children}
-			</text>
-		) : (
-			<text wrapMode="none" truncate fg={fg}>
-				{children}
-			</text>
-		)}
-	</box>
-)
+const collapseFormattingWhitespace = (children: React.ReactNode) => Children.toArray(children).filter((child) => {
+	if (typeof child !== "string") return true
+	if (child.trim().length > 0) return true
+	// OpenTUI preserves JSX indentation/newline text nodes, so strip the
+	// formatting-only whitespace between inline spans while keeping any
+	// intentional in-band spaces that callers render explicitly.
+	return !/[\r\n\t]/.test(child)
+})
+
+export const TextLine = ({ children, fg = colors.text, bg }: { children: React.ReactNode; fg?: string; bg?: string | undefined }) => {
+	const inlineChildren = collapseFormattingWhitespace(children)
+
+	return (
+		<box height={1}>
+			{bg ? (
+				<text wrapMode="none" truncate fg={fg} bg={bg}>
+					{inlineChildren}
+				</text>
+			) : (
+				<text wrapMode="none" truncate fg={fg}>
+					{inlineChildren}
+				</text>
+			)}
+		</box>
+	)
+}
 
 export const AlignedHeaderLine = ({ left, right, width, rightFg = colors.muted }: { left: string; right: string; width: number; rightFg?: string }) => {
 	const availableRightWidth = Math.max(8, width - left.length - 2)

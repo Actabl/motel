@@ -1,5 +1,5 @@
 import type { TraceSpanItem } from "../domain.ts"
-import { findFirstChildIndex, findParentIndex, getVisibleSpans } from "./Waterfall.tsx"
+import { findFirstChildIndex, findParentIndex, getVisibleSpans } from "./waterfallModel.ts"
 
 export type CollapseStep = {
 	readonly collapsed: ReadonlySet<string>

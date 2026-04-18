@@ -12,18 +12,20 @@ import {
 	attrPickerInputAtom,
 	attrPickerModeAtom,
 	attrFacetStateAtom,
+	expandedChatChunkIdsAtom,
 	noticeAtom,
 	persistSelectedTheme,
 	selectedAttrIndexAtom,
+	selectedChatChunkIdAtom,
 	selectedThemeAtom,
 	waterfallFilterModeAtom,
 	waterfallFilterTextAtom,
 } from "./ui/state.ts"
 import { applyTheme, colors, SEPARATOR, themeLabel } from "./ui/theme.ts"
-import { getVisibleSpans } from "./ui/Waterfall.tsx"
 import { useKeyboardNav } from "./ui/useKeyboardNav.ts"
 import { AttrFilterModal } from "./ui/AttrFilterModal.tsx"
 import { useAttrFilterPicker } from "./ui/useAttrFilterPicker.ts"
+import { getVisibleSpans } from "./ui/Waterfall.tsx"
 
 export const App = () => {
 	const { width, height } = useTerminalDimensions()
@@ -55,6 +57,8 @@ export const App = () => {
 		selectedTraceSummary,
 		selectedTrace,
 		filteredTraces,
+		aiCallDetailState,
+		aiChatChunks,
 	} = useTraceScreenData()
 	const [pickerMode] = useAtom(attrPickerModeAtom)
 	const [pickerInput] = useAtom(attrPickerInputAtom)
@@ -63,6 +67,8 @@ export const App = () => {
 	const [waterfallFilterMode] = useAtom(waterfallFilterModeAtom)
 	const [waterfallFilterText] = useAtom(waterfallFilterTextAtom)
 	const [selectedAttrIndex] = useAtom(selectedAttrIndexAtom)
+	const [selectedChatChunkId] = useAtom(selectedChatChunkIdAtom)
+	const [expandedChatChunkIds] = useAtom(expandedChatChunkIdsAtom)
 	useAttrFilterPicker(activeAttrKey)
 
 	const layout = useAppLayout({ width, height, notice, detailView, selectedSpanIndex })
@@ -108,6 +114,7 @@ export const App = () => {
 	const { spanNavActive } = useKeyboardNav({
 		selectedTrace,
 		filteredTraces,
+		aiChatChunks,
 		isWideLayout,
 		wideBodyLines,
 		narrowBodyLines,
@@ -208,6 +215,10 @@ export const App = () => {
 				selectedSpan={selectedSpan}
 				selectedSpanLogs={selectedSpanLogs}
 				selectedAttrIndex={selectedAttrIndex}
+				aiCallDetailState={aiCallDetailState}
+				aiChatChunks={aiChatChunks}
+				selectedChatChunkId={selectedChatChunkId}
+				expandedChatChunkIds={expandedChatChunkIds}
 				selectSpan={selectSpan}
 			/>
 			{footerHeight > 0 ? (

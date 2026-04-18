@@ -3,6 +3,7 @@ import { useKeyboard, useRenderer } from "@opentui/react"
 import { useEffect, useLayoutEffect, useRef } from "react"
 import { isAiSpan, type TraceItem, type TraceSummaryItem } from "../domain.ts"
 import { otelServerInstructions } from "../instructions.ts"
+import { toggleChunkExpansion, type Chunk } from "./aiChatModel.ts"
 import { copyToClipboard, traceUiUrl, webUiUrl } from "./format.ts"
 import {
 	activeAttrKeyAtom,
@@ -15,10 +16,12 @@ import {
 	chatScrollOffsetAtom,
 	collapsedSpanIdsAtom,
 	detailViewAtom,
+	expandedChatChunkIdsAtom,
 	filterModeAtom,
 	filterTextAtom,
 	refreshNonceAtom,
 	selectedAttrIndexAtom,
+	selectedChatChunkIdAtom,
 	selectedThemeAtom,
 	selectedServiceLogIndexAtom,
 	selectedSpanIndexAtom,
@@ -35,8 +38,8 @@ import {
 import { filterFacets } from "./AttrFilterModal.tsx"
 import { G_PREFIX_TIMEOUT_MS } from "./theme.ts"
 import { cycleThemeName, themeLabel } from "./theme.ts"
-import { getVisibleSpans } from "./Waterfall.tsx"
 import { computeMatchingSpanIds, findAdjacentMatch } from "./waterfallFilter.ts"
+import { getVisibleSpans } from "./Waterfall.tsx"
 import { resolveCollapseStep } from "./waterfallNav.ts"
 
 /**
@@ -78,6 +81,7 @@ const extractPrintable = (key: KeyboardKey): string | null => {
 interface KeyboardNavParams {
 	selectedTrace: TraceItem | null
 	filteredTraces: readonly TraceSummaryItem[]
+	aiChatChunks: readonly Chunk[]
 	isWideLayout: boolean
 	wideBodyLines: number
 	narrowBodyLines: number
@@ -126,6 +130,8 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const [waterfallFilterText, setWaterfallFilterText] = useAtom(waterfallFilterTextAtom)
 	const [selectedAttrIndex, setSelectedAttrIndex] = useAtom(selectedAttrIndexAtom)
 	const [chatScrollOffset, setChatScrollOffset] = useAtom(chatScrollOffsetAtom)
+	const [selectedChatChunkId, setSelectedChatChunkId] = useAtom(selectedChatChunkIdAtom)
+	const [expandedChatChunkIds, setExpandedChatChunkIds] = useAtom(expandedChatChunkIdsAtom)
 
 	const pendingGRef = useRef(false)
 	const pendingGTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -202,6 +208,8 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		chatNavActive,
 		selectedAttrIndex,
 		chatScrollOffset,
+		selectedChatChunkId,
+		expandedChatChunkIds,
 		filterMode,
 		filterText,
 		autoRefresh,
@@ -322,9 +330,23 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 		setSelectedAttrIndex(Math.max(0, Math.min(s.selectedAttrIndex + delta, count - 1)))
 	}
 
+	const moveChatChunkBy = (direction: -1 | 1) => {
+		const s = $()
+		const chunks = s.aiChatChunks
+		if (chunks.length === 0) return
+		const currentIdx = s.selectedChatChunkId
+			? chunks.findIndex((c) => c.id === s.selectedChatChunkId)
+			: 0
+		const nextIdx = Math.max(0, Math.min(currentIdx + direction, chunks.length - 1))
+		const next = chunks[nextIdx]
+		if (next) setSelectedChatChunkId(next.id)
+	}
+
 	const jumpToStart = () => {
 		const s = $()
 		if (s.chatNavActive) {
+			const first = s.aiChatChunks[0]
+			if (first) setSelectedChatChunkId(first.id)
 			setChatScrollOffset(0)
 			return
 		}
@@ -343,8 +365,8 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const jumpToEnd = () => {
 		const s = $()
 		if (s.chatNavActive) {
-			// Oversize jump; AiChatView clamps to its actual lines length.
-			setChatScrollOffset(999_999)
+			const last = s.aiChatChunks[s.aiChatChunks.length - 1]
+			if (last) setSelectedChatChunkId(last.id)
 			return
 		}
 		if (s.attrNavActive) {
@@ -389,6 +411,24 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			.then(() => {
 				const preview = value.length > 40 ? `${value.slice(0, 39)}\u2026` : value
 				s.flashNotice(`Copied ${key}: ${preview}`)
+			})
+			.catch((error) => {
+				s.flashNotice(error instanceof Error ? error.message : String(error))
+			})
+	}
+
+	const copySelectedChatChunk = () => {
+		const s = $()
+		const chunk = s.aiChatChunks.find((c) => c.id === s.selectedChatChunkId)
+		if (!chunk) {
+			s.flashNotice("No chunk selected")
+			return
+		}
+		const payload = chunk.body.length > 0 ? chunk.body : chunk.header
+		void copyToClipboard(payload)
+			.then(() => {
+				const label = chunk.toolName ?? chunk.kind
+				s.flashNotice(`Copied ${label} (${payload.length} chars)`)
 			})
 			.catch((error) => {
 				s.flashNotice(error instanceof Error ? error.message : String(error))
@@ -446,8 +486,17 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const pageBy = (direction: -1 | 1) => {
 		const s = $()
 		if (s.chatNavActive) {
-			const pageSize = Math.max(1, Math.floor((s.isWideLayout ? s.wideBodyLines : s.narrowBodyLines) / 2))
-			setChatScrollOffset((current) => Math.max(0, current + direction * pageSize))
+			// Page-by-half in chunk units. Feels like a "jump by several
+			// chunks" rather than strict line paging, which matches the
+			// semantics of the chunk cursor.
+			const pageSize = Math.max(1, Math.floor(s.aiChatChunks.length / 4))
+			const chunks = s.aiChatChunks
+			const currentIdx = s.selectedChatChunkId
+				? chunks.findIndex((c) => c.id === s.selectedChatChunkId)
+				: 0
+			const nextIdx = Math.max(0, Math.min(currentIdx + direction * pageSize, chunks.length - 1))
+			const next = chunks[nextIdx]
+			if (next) setSelectedChatChunkId(next.id)
 			return
 		}
 		if (s.attrNavActive) {
@@ -703,6 +752,17 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const handleEnterKey = (key: KeyboardKey) => {
 		if (key.name !== "return" && key.name !== "enter") return false
 		const s = $()
+		// In the AI chat view, enter toggles expansion of the selected
+		// chunk (system prompts, reasoning, tool call args, long tool
+		// results). Non-collapsible chunks no-op so the user isn't
+		// punished for habit-pressing enter.
+		if (s.chatNavActive) {
+			const chunk = s.aiChatChunks.find((c) => c.id === s.selectedChatChunkId)
+			if (chunk && chunk.collapsible) {
+				setExpandedChatChunkIds(toggleChunkExpansion(chunk, s.expandedChatChunkIds))
+			}
+			return true
+		}
 		if (s.detailView === "service-logs") {
 			const selectedLog = s.serviceLogState.data[s.selectedServiceLogIndex]
 			if (selectedLog?.traceId) {
@@ -796,19 +856,25 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 	const handleMovementKeys = (key: KeyboardKey) => {
 		const s = $()
 		if (key.name === "up" || key.name === "k") {
-			if (s.chatNavActive) setChatScrollOffset(Math.max(0, s.chatScrollOffset - 1))
-			else if (s.attrNavActive) moveAttrBy(-1)
-			else if (s.serviceLogNavActive) moveServiceLogBy(-1)
-			else if (s.spanNavActive && s.selectedTrace) moveSpanBy(-1)
-			else moveTraceBy(-1)
+			if (s.chatNavActive) {
+				moveChatChunkBy(-1)
+				return true
+			}
+			if (s.attrNavActive) { moveAttrBy(-1); return true }
+			if (s.serviceLogNavActive) { moveServiceLogBy(-1); return true }
+			if (s.spanNavActive) { moveSpanBy(-1); return true }
+			moveTraceBy(-1)
 			return true
 		}
 		if (key.name === "down" || key.name === "j") {
-			if (s.chatNavActive) setChatScrollOffset(s.chatScrollOffset + 1)
-			else if (s.attrNavActive) moveAttrBy(1)
-			else if (s.serviceLogNavActive) moveServiceLogBy(1)
-			else if (s.spanNavActive && s.selectedTrace) moveSpanBy(1)
-			else moveTraceBy(1)
+			if (s.chatNavActive) {
+				moveChatChunkBy(1)
+				return true
+			}
+			if (s.attrNavActive) { moveAttrBy(1); return true }
+			if (s.serviceLogNavActive) { moveServiceLogBy(1); return true }
+			if (s.spanNavActive) { moveSpanBy(1); return true }
+			moveTraceBy(1)
 			return true
 		}
 		if (key.name === "left" || key.name === "h") {
@@ -870,7 +936,8 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			return true
 		}
 		if (key.name === "y" || key.name === "Y") {
-			if (s.attrNavActive && !s.chatNavActive) copySelectedAttrValue()
+			if (s.chatNavActive) copySelectedChatChunk()
+			else if (s.attrNavActive) copySelectedAttrValue()
 			else copySelectedIds()
 			return true
 		}

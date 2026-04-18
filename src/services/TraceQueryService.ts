@@ -1,5 +1,5 @@
 import { Effect, Layer, Context } from "effect"
-import type { SpanItem, TraceItem, TraceSummaryItem } from "../domain.js"
+import type { AiCallDetail, SpanItem, TraceItem, TraceSummaryItem } from "../domain.js"
 import { TelemetryStore } from "./TelemetryStore.js"
 
 export class TraceQueryService extends Context.Service<
@@ -14,6 +14,7 @@ export class TraceQueryService extends Context.Service<
 		readonly traceStats: (input: { readonly groupBy: string; readonly agg: "count" | "avg_duration" | "p95_duration" | "error_rate"; readonly serviceName?: string | null; readonly operation?: string | null; readonly status?: "ok" | "error" | null; readonly minDurationMs?: number | null; readonly lookbackMinutes?: number; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) => Effect.Effect<readonly { readonly group: string; readonly value: number; readonly count: number }[], Error>
 		readonly getTrace: (traceId: string) => Effect.Effect<TraceItem | null, Error>
 		readonly getSpan: (spanId: string) => Effect.Effect<SpanItem | null, Error>
+		readonly getAiCall: (spanId: string) => Effect.Effect<AiCallDetail | null, Error>
 		readonly listTraceSpans: (traceId: string) => Effect.Effect<readonly SpanItem[], Error>
 		readonly searchSpans: (input: { readonly serviceName?: string | null; readonly operation?: string | null; readonly parentOperation?: string | null; readonly status?: "ok" | "error" | null; readonly lookbackMinutes?: number; readonly limit?: number; readonly attributeFilters?: Readonly<Record<string, string>> }) => Effect.Effect<readonly SpanItem[], Error>
 	}
@@ -68,6 +69,7 @@ export const TraceQueryServiceLive = Layer.effect(
 			traceStats: store.traceStats,
 			getTrace,
 			getSpan,
+			getAiCall: store.getAiCall,
 			listTraceSpans: store.listTraceSpans,
 			searchSpans: store.searchSpans,
 		})

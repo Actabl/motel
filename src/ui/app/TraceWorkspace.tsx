@@ -1,4 +1,5 @@
 import { isAiSpan, type LogItem, type TraceItem, type TraceSummaryItem } from "../../domain.ts"
+import type { Chunk } from "../aiChatModel.ts"
 import { AiChatView } from "../AiChatView.tsx"
 import { formatShortDate, formatTimestamp } from "../format.ts"
 import { AlignedHeaderLine, BlankRow, Divider, SeparatorColumn, TextLine } from "../primitives.tsx"
@@ -73,7 +74,9 @@ interface SpanDrillInSceneProps {
 	readonly aiDrillIn: boolean
 	readonly selectedSpan: TraceItem["spans"][number] | null
 	readonly aiCallDetailState: AiCallDetailState
-	readonly chatScrollOffset: number
+	readonly aiChatChunks: readonly Chunk[]
+	readonly selectedChatChunkId: string | null
+	readonly expandedChatChunkIds: ReadonlySet<string>
 	readonly contentWidth: number
 	readonly bodyLines: number
 	readonly paneWidth: number
@@ -84,7 +87,9 @@ const SpanDrillInScene = ({
 	aiDrillIn,
 	selectedSpan,
 	aiCallDetailState,
-	chatScrollOffset,
+	aiChatChunks,
+	selectedChatChunkId,
+	expandedChatChunkIds,
 	contentWidth,
 	bodyLines,
 	paneWidth,
@@ -93,7 +98,9 @@ const SpanDrillInScene = ({
 	<AiChatView
 		span={selectedSpan}
 		detailState={aiCallDetailState}
-		scrollOffset={chatScrollOffset}
+		chunks={aiChatChunks}
+		selectedChunkId={selectedChatChunkId}
+		expandedChunkIds={expandedChatChunkIds}
 		contentWidth={contentWidth}
 		bodyLines={bodyLines}
 		paneWidth={paneWidth}
@@ -201,8 +208,10 @@ interface TraceWorkspaceProps {
 	readonly selectedSpan: TraceItem["spans"][number] | null
 	readonly selectedSpanLogs: readonly LogItem[]
 	readonly selectedAttrIndex: number
-	readonly chatScrollOffset: number
 	readonly aiCallDetailState: AiCallDetailState
+	readonly aiChatChunks: readonly Chunk[]
+	readonly selectedChatChunkId: string | null
+	readonly expandedChatChunkIds: ReadonlySet<string>
 	readonly selectSpan: (index: number) => void
 }
 
@@ -228,8 +237,10 @@ export const TraceWorkspace = ({
 	selectedSpan,
 	selectedSpanLogs,
 	selectedAttrIndex,
-	chatScrollOffset,
 	aiCallDetailState,
+	aiChatChunks,
+	selectedChatChunkId,
+	expandedChatChunkIds,
 	selectSpan,
 }: TraceWorkspaceProps) => {
 	const aiDrillIn = selectedSpan !== null && isAiSpan(selectedSpan.tags)
@@ -341,7 +352,9 @@ export const TraceWorkspace = ({
 					aiDrillIn={aiDrillIn}
 					selectedSpan={selectedSpan}
 					aiCallDetailState={aiCallDetailState}
-					chatScrollOffset={chatScrollOffset}
+					aiChatChunks={aiChatChunks}
+					selectedChatChunkId={selectedChatChunkId}
+					expandedChatChunkIds={expandedChatChunkIds}
 					contentWidth={drillInContentWidth}
 					bodyLines={wideBodyLines}
 					paneWidth={contentWidth}
@@ -396,7 +409,9 @@ export const TraceWorkspace = ({
 					aiDrillIn={aiDrillIn}
 					selectedSpan={selectedSpan}
 					aiCallDetailState={aiCallDetailState}
-					chatScrollOffset={chatScrollOffset}
+					aiChatChunks={aiChatChunks}
+					selectedChatChunkId={selectedChatChunkId}
+					expandedChatChunkIds={expandedChatChunkIds}
 					contentWidth={drillInContentWidth}
 					bodyLines={narrowFullBodyLines}
 					paneWidth={contentWidth}
