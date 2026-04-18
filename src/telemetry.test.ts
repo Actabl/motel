@@ -4,6 +4,15 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect, References } from "effect"
 import { attributeFiltersFromArgs, attributeContainsFiltersFromArgs, isAttributeFilterToken, isAttributeContainsToken } from "./queryFilters.js"
+import { decodeLogExportRequestFromProtobuf, decodeTraceExportRequestFromProtobuf } from "./otlpProtobuf.js"
+
+import otlpRootModule = require("@opentelemetry/otlp-transformer/build/src/generated/root")
+
+const otlpRoot = otlpRootModule as any
+const traceRequestType = otlpRoot.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
+const logRequestType = otlpRoot.opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest
+
+const hexToBytes = (hex: string): Uint8Array => Uint8Array.from(Buffer.from(hex, "hex"))
 
 describe("motel telemetry store", () => {
 	const tempDir = mkdtempSync(join(tmpdir(), "motel-test-"))
@@ -783,5 +792,154 @@ describe("motel telemetry store", () => {
 		expect(motelOpenApiSpec.paths["/api/ai/calls"]).toBeDefined()
 		expect(motelOpenApiSpec.paths["/api/ai/calls/{spanId}"]).toBeDefined()
 		expect(motelOpenApiSpec.paths["/api/ai/stats"]).toBeDefined()
+	})
+
+	it("stores equivalent queryable trace and log data for JSON and protobuf payloads", async () => {
+		const nowNanos = BigInt(Date.now()) * 1_000_000n
+		const oneSecond = 1_000_000_000n
+
+		const protobufTracePayload = decodeTraceExportRequestFromProtobuf(traceRequestType.encode({
+			resourceSpans: [{
+				resource: {
+					attributes: [
+						{ key: "service.name", value: { stringValue: "protobuf-equivalence-service" } },
+						{ key: "deployment.environment.name", value: { stringValue: "local" } },
+					],
+				},
+				scopeSpans: [{
+					scope: { name: "protobuf-scope" },
+					spans: [{
+						traceId: hexToBytes("1234567890abcdef1234567890abcdef"),
+						spanId: hexToBytes("abcdef1234567890"),
+						name: "protobuf.trace.root",
+						kind: 2,
+						startTimeUnixNano: String(nowNanos),
+						endTimeUnixNano: String(nowNanos + 2n * oneSecond),
+						attributes: [{ key: "equivalence.kind", value: { stringValue: "protobuf" } }],
+					}],
+				}],
+			}],
+		}).finish() as Uint8Array)
+
+		const protobufLogPayload = decodeLogExportRequestFromProtobuf(logRequestType.encode({
+			resourceLogs: [{
+				resource: {
+					attributes: [{ key: "service.name", value: { stringValue: "protobuf-equivalence-service" } }],
+				},
+				scopeLogs: [{
+					scope: { name: "protobuf-scope" },
+					logRecords: [{
+						timeUnixNano: String(nowNanos + oneSecond),
+						severityText: "INFO",
+						body: { stringValue: "protobuf log body" },
+						traceId: hexToBytes("1234567890abcdef1234567890abcdef"),
+						spanId: hexToBytes("abcdef1234567890"),
+						attributes: [{ key: "equivalence.kind", value: { stringValue: "protobuf" } }],
+					}],
+				}],
+			}],
+		}).finish() as Uint8Array)
+
+		await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				Effect.flatMap(
+					store.ingestTraces({
+						resourceSpans: [{
+							resource: {
+								attributes: [
+									{ key: "service.name", value: { stringValue: "json-equivalence-service" } },
+									{ key: "deployment.environment.name", value: { stringValue: "local" } },
+								],
+							},
+							scopeSpans: [{
+								scope: { name: "json-scope" },
+								spans: [{
+									traceId: "json-trace-1",
+									spanId: "json-span-1",
+									name: "json.trace.root",
+									kind: 2,
+									startTimeUnixNano: String(nowNanos + 10n * oneSecond),
+									endTimeUnixNano: String(nowNanos + 12n * oneSecond),
+									attributes: [{ key: "equivalence.kind", value: { stringValue: "json" } }],
+								}],
+							}],
+						}],
+					}),
+					() => store.ingestLogs({
+						resourceLogs: [{
+							resource: { attributes: [{ key: "service.name", value: { stringValue: "json-equivalence-service" } }] },
+							scopeLogs: [{
+								scope: { name: "json-scope" },
+								logRecords: [{
+									timeUnixNano: String(nowNanos + 11n * oneSecond),
+									severityText: "INFO",
+									body: { stringValue: "json log body" },
+									traceId: "json-trace-1",
+									spanId: "json-span-1",
+									attributes: [{ key: "equivalence.kind", value: { stringValue: "json" } }],
+								}],
+							}],
+						}],
+					}),
+				),
+			).pipe(
+				Effect.flatMap(() =>
+					Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+						Effect.flatMap(
+							store.ingestTraces(protobufTracePayload),
+							() => store.ingestLogs(protobufLogPayload),
+						),
+					),
+				),
+				Effect.provideService(References.MinimumLogLevel, "None"),
+			),
+		)
+
+		const traceSummaries = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) => store.listTraceSummaries(null)).pipe(
+				Effect.provideService(References.MinimumLogLevel, "None"),
+			),
+		)
+
+		expect(traceSummaries.some((trace) => trace.traceId === "json-trace-1" && trace.serviceName === "json-equivalence-service")).toBe(true)
+		expect(traceSummaries.some((trace) => trace.traceId === "1234567890abcdef1234567890abcdef" && trace.serviceName === "protobuf-equivalence-service")).toBe(true)
+
+		const protobufTrace = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) => store.getTrace("1234567890abcdef1234567890abcdef")).pipe(
+				Effect.provideService(References.MinimumLogLevel, "None"),
+			),
+		)
+		const jsonTrace = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) => store.getTrace("json-trace-1")).pipe(
+				Effect.provideService(References.MinimumLogLevel, "None"),
+			),
+		)
+
+		expect(protobufTrace?.serviceName).toBe("protobuf-equivalence-service")
+		expect(protobufTrace?.spans[0]?.spanId).toBe("abcdef1234567890")
+		expect(protobufTrace?.spans[0]?.tags["equivalence.kind"]).toBe("protobuf")
+		expect(jsonTrace?.serviceName).toBe("json-equivalence-service")
+		expect(jsonTrace?.spans[0]?.spanId).toBe("json-span-1")
+		expect(jsonTrace?.spans[0]?.tags["equivalence.kind"]).toBe("json")
+
+		const protobufLogs = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchLogs({ serviceName: "protobuf-equivalence-service" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+		const jsonLogs = await storeRuntime.runPromise(
+			Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+				store.searchLogs({ serviceName: "json-equivalence-service" }),
+			).pipe(Effect.provideService(References.MinimumLogLevel, "None")),
+		)
+
+		expect(protobufLogs).toHaveLength(1)
+		expect(protobufLogs[0]?.traceId).toBe("1234567890abcdef1234567890abcdef")
+		expect(protobufLogs[0]?.spanId).toBe("abcdef1234567890")
+		expect(protobufLogs[0]?.attributes["equivalence.kind"]).toBe("protobuf")
+		expect(jsonLogs).toHaveLength(1)
+		expect(jsonLogs[0]?.traceId).toBe("json-trace-1")
+		expect(jsonLogs[0]?.spanId).toBe("json-span-1")
+		expect(jsonLogs[0]?.attributes["equivalence.kind"]).toBe("json")
 	})
 })
