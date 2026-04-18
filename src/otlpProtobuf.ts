@@ -16,6 +16,10 @@ import type {
 const otlpRoot = otlpRootModule as any
 const traceRequestType = otlpRoot.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
 const logsRequestType = otlpRoot.opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest
+const traceResponseType = otlpRoot.opentelemetry.proto.collector.trace.v1.ExportTraceServiceResponse
+const logsResponseType = otlpRoot.opentelemetry.proto.collector.logs.v1.ExportLogsServiceResponse
+
+const textEncoder = new TextEncoder()
 
 type ProtoBytes = Uint8Array | Buffer | number[] | string | null | undefined
 
@@ -189,4 +193,41 @@ export const decodeLogExportRequestFromProtobuf = (bytes: Uint8Array): OtlpLogEx
 	return {
 		...(decoded.resourceLogs?.length ? { resourceLogs: decoded.resourceLogs.map(normalizeResourceLogs) } : {}),
 	}
+}
+
+export const encodeTraceExportSuccessResponseToProtobuf = (): Uint8Array =>
+	traceResponseType.encode({}).finish() as Uint8Array
+
+export const encodeLogExportSuccessResponseToProtobuf = (): Uint8Array =>
+	logsResponseType.encode({}).finish() as Uint8Array
+
+const encodeVarint = (value: number): Uint8Array => {
+	const bytes: number[] = []
+	let current = value >>> 0
+	while (current >= 0x80) {
+		bytes.push((current & 0x7f) | 0x80)
+		current >>>= 7
+	}
+	bytes.push(current)
+	return Uint8Array.from(bytes)
+}
+
+const concatBytes = (...parts: readonly Uint8Array[]): Uint8Array => {
+	const total = parts.reduce((sum, part) => sum + part.length, 0)
+	const output = new Uint8Array(total)
+	let offset = 0
+	for (const part of parts) {
+		output.set(part, offset)
+		offset += part.length
+	}
+	return output
+}
+
+export const encodeRpcStatusToProtobuf = (message: string): Uint8Array => {
+	const messageBytes = textEncoder.encode(message)
+	return concatBytes(
+		encodeVarint((2 << 3) | 2),
+		encodeVarint(messageBytes.length),
+		messageBytes,
+	)
 }

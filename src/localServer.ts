@@ -9,11 +9,19 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import * as HttpStaticServer from "effect/unstable/http/HttpStaticServer"
 import * as BunHttpServer from "@effect/platform-bun/BunHttpServer"
 import { MotelHttpApi } from "./httpApi.js"
+import {
+	decodeLogExportRequestFromProtobuf,
+	decodeTraceExportRequestFromProtobuf,
+	encodeLogExportSuccessResponseToProtobuf,
+	encodeRpcStatusToProtobuf,
+	encodeTraceExportSuccessResponseToProtobuf,
+} from "./otlpProtobuf.js"
 import { attributeFiltersFromEntries, attributeContainsFiltersFromEntries } from "./queryFilters.js"
 import { MOTEL_SERVICE_ID, MOTEL_VERSION, removeRegistryEntry, writeRegistryEntry } from "./registry.js"
 import { AsyncIngest, AsyncIngestLive } from "./services/AsyncIngest.js"
 import { TelemetryStore, TelemetryStoreLive } from "./services/TelemetryStore.js"
 import type { LogItem, TraceItem, TraceSummaryItem } from "./domain.js"
+import type { OtlpLogExportRequest, OtlpTraceExportRequest } from "./otlp.js"
 import { lifecycleLabel } from "./ui/format.js"
 
 // Set by the RegistryLayer acquisition once the Bun socket has bound.
@@ -37,6 +45,10 @@ const jsonResponse = (value: unknown, status = 200) => HttpServerResponse.jsonUn
 const textResponse = (value: string) => HttpServerResponse.text(value)
 const htmlResponse = (value: string) => HttpServerResponse.html(value)
 const notFoundResponse = (message = "Not found") => jsonResponse({ error: message }, 404)
+const protobufResponse = (value: Uint8Array, status = 200) => HttpServerResponse.uint8Array(value, {
+	status,
+	contentType: "application/x-protobuf",
+})
 const requestUrl = (request: { readonly url: string }) => new URL(request.url, config.otel.baseUrl)
 const withStore = <A>(f: (store: TelemetryStore["Service"]) => Effect.Effect<A, Error>) => Effect.flatMap(TelemetryStore.asEffect(), f)
 // Response-building helpers are generic in R so a handler can depend
@@ -56,6 +68,76 @@ const respondRaw = <R>(effect: Effect.Effect<ReturnType<typeof jsonResponse>, un
 const parseLimit = (value: string | null, fallback: number) => parsePositiveInt(value ?? undefined, fallback)
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max))
 const parseBoundedLimit = (value: string | null, fallback: number, max: number) => clamp(parseLimit(value, fallback), 1, max)
+
+type OtlpRequestEncoding = "json" | "protobuf"
+type DecodedTraceRequest =
+	| { readonly kind: "unsupported" }
+	| { readonly kind: "decoded"; readonly encoding: OtlpRequestEncoding; readonly payload: OtlpTraceExportRequest }
+type DecodedLogRequest =
+	| { readonly kind: "unsupported" }
+	| { readonly kind: "decoded"; readonly encoding: OtlpRequestEncoding; readonly payload: OtlpLogExportRequest }
+
+const parseMediaType = (request: { readonly headers: { readonly [key: string]: string | undefined } }) =>
+	request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() ?? ""
+
+const detectOtlpEncoding = (request: { readonly headers: { readonly [key: string]: string | undefined } }) => {
+	const mediaType = parseMediaType(request)
+	if (mediaType === "" || mediaType === "application/json") return "json" as const
+	if (mediaType === "application/x-protobuf" || mediaType === "application/protobuf") return "protobuf" as const
+	return null
+}
+
+const invalidOtlpRequestResponse = (message: string, encoding: OtlpRequestEncoding) =>
+	encoding === "protobuf"
+		? protobufResponse(encodeRpcStatusToProtobuf(message), 400)
+		: jsonResponse({ message }, 400)
+
+const unsupportedOtlpMediaTypeMessage = "Unsupported content type. Expected application/json, application/x-protobuf, or an empty Content-Type."
+const unsupportedOtlpMediaTypeResponse = (encoding: OtlpRequestEncoding = "json") =>
+	encoding === "protobuf"
+		? protobufResponse(encodeRpcStatusToProtobuf(unsupportedOtlpMediaTypeMessage), 415)
+		: jsonResponse({ message: unsupportedOtlpMediaTypeMessage }, 415)
+
+const ingestSuccessResponse = (encoding: OtlpRequestEncoding, signal: "traces" | "logs") =>
+	encoding === "protobuf"
+		? protobufResponse(signal === "traces" ? encodeTraceExportSuccessResponseToProtobuf() : encodeLogExportSuccessResponseToProtobuf())
+		: jsonResponse({})
+
+const decodeTraceRequest = (request: { readonly json: Effect.Effect<unknown, unknown>; readonly arrayBuffer: Effect.Effect<ArrayBuffer, unknown>; readonly headers: { readonly [key: string]: string | undefined } }) => {
+	const encoding = detectOtlpEncoding(request)
+	if (!encoding) return Effect.succeed<DecodedTraceRequest>({ kind: "unsupported" })
+	if (encoding === "json") {
+		return Effect.map(request.json, (payload): DecodedTraceRequest => ({ kind: "decoded", encoding, payload: payload as OtlpTraceExportRequest }))
+	}
+	return Effect.flatMap(request.arrayBuffer, (buffer) =>
+		Effect.try({
+			try: (): DecodedTraceRequest => ({
+				kind: "decoded",
+				encoding,
+				payload: decodeTraceExportRequestFromProtobuf(new Uint8Array(buffer)),
+			}),
+			catch: (error) => error,
+		}),
+	)
+}
+
+const decodeLogRequest = (request: { readonly json: Effect.Effect<unknown, unknown>; readonly arrayBuffer: Effect.Effect<ArrayBuffer, unknown>; readonly headers: { readonly [key: string]: string | undefined } }) => {
+	const encoding = detectOtlpEncoding(request)
+	if (!encoding) return Effect.succeed<DecodedLogRequest>({ kind: "unsupported" })
+	if (encoding === "json") {
+		return Effect.map(request.json, (payload): DecodedLogRequest => ({ kind: "decoded", encoding, payload: payload as OtlpLogExportRequest }))
+	}
+	return Effect.flatMap(request.arrayBuffer, (buffer) =>
+		Effect.try({
+			try: (): DecodedLogRequest => ({
+				kind: "decoded",
+				encoding,
+				payload: decodeLogExportRequestFromProtobuf(new Uint8Array(buffer)),
+			}),
+			catch: (error) => error,
+		}),
+	)
+}
 
 const parseLookbackMinutes = (value: string | null, fallback: number) => {
 	if (!value) return fallback
@@ -294,22 +376,30 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			// are fast enough that IPC overhead isn't worth paying.
 			.handleRaw("ingestTraces", ({ request }) =>
 				respondRaw(
-					Effect.flatMap(request.json, (payload) =>
-						Effect.map(
-							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestTraces({ payload })),
-							(result) => jsonResponse(result),
-						),
-					),
+					Effect.gen(function*() {
+						const decoded = yield* Effect.matchCause(decodeTraceRequest(request), {
+							onFailure: () => ({ kind: "invalid" as const, encoding: detectOtlpEncoding(request) }),
+							onSuccess: (value) => value,
+						})
+						if (decoded.kind === "unsupported") return unsupportedOtlpMediaTypeResponse()
+						if (decoded.kind === "invalid") return invalidOtlpRequestResponse("Invalid OTLP trace export payload.", decoded.encoding ?? "json")
+						yield* Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestTraces({ payload: decoded.payload }))
+						return ingestSuccessResponse(decoded.encoding, "traces")
+					}),
 				),
 			)
 			.handleRaw("ingestLogs", ({ request }) =>
 				respondRaw(
-					Effect.flatMap(request.json, (payload) =>
-						Effect.map(
-							Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestLogs({ payload })),
-							(result) => jsonResponse(result),
-						),
-					),
+					Effect.gen(function*() {
+						const decoded = yield* Effect.matchCause(decodeLogRequest(request), {
+							onFailure: () => ({ kind: "invalid" as const, encoding: detectOtlpEncoding(request) }),
+							onSuccess: (value) => value,
+						})
+						if (decoded.kind === "unsupported") return unsupportedOtlpMediaTypeResponse()
+						if (decoded.kind === "invalid") return invalidOtlpRequestResponse("Invalid OTLP log export payload.", decoded.encoding ?? "json")
+						yield* Effect.flatMap(AsyncIngest.asEffect(), (ingest) => ingest.ingestLogs({ payload: decoded.payload }))
+						return ingestSuccessResponse(decoded.encoding, "logs")
+					}),
 				),
 			)
 			.handleRaw("services", () => respondJson(Effect.map(withStore((store) => store.listServices), (data) => ({ data }))))
