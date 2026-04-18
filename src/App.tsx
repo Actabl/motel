@@ -8,6 +8,7 @@ import { useAppLayout } from "./ui/app/useAppLayout.ts"
 import { useTraceScreenData } from "./ui/app/useTraceScreenData.ts"
 import { TraceWorkspace } from "./ui/app/TraceWorkspace.tsx"
 import {
+	type AttrFacetState,
 	attrPickerIndexAtom,
 	attrPickerInputAtom,
 	attrPickerModeAtom,
@@ -21,11 +22,158 @@ import {
 	waterfallFilterModeAtom,
 	waterfallFilterTextAtom,
 } from "./ui/state.ts"
+import type { ThemeName } from "./ui/theme.ts"
 import { applyTheme, colors, SEPARATOR, themeLabel } from "./ui/theme.ts"
 import { useKeyboardNav } from "./ui/useKeyboardNav.ts"
 import { AttrFilterModal } from "./ui/AttrFilterModal.tsx"
 import { useAttrFilterPicker } from "./ui/useAttrFilterPicker.ts"
 import { getVisibleSpans } from "./ui/Waterfall.tsx"
+
+const NOTICE_TIMEOUT_MS = 2500
+
+const buildHeaderModel = ({
+	headerFooterWidth,
+	selectedTraceService,
+	activeAttrKey,
+	activeAttrValue,
+	autoRefresh,
+	fetchedAt,
+	status,
+}: {
+	readonly headerFooterWidth: number
+	readonly selectedTraceService: string | null
+	readonly activeAttrKey: string | null
+	readonly activeAttrValue: string | null
+	readonly autoRefresh: boolean
+	readonly fetchedAt: Date | null
+	readonly status: string
+}) => {
+	const serviceLabel = selectedTraceService ?? "none"
+	const autoLabel = autoRefresh ? "● live" : "○ paused"
+	const attrFilterLabel = activeAttrKey && activeAttrValue
+		? `  [${activeAttrKey}=${activeAttrValue.length > 20 ? `${activeAttrValue.slice(0, 19)}…` : activeAttrValue}]`
+		: ""
+	const right = fetchedAt
+		? `${autoLabel}  ${formatTimestamp(fetchedAt)}`
+		: status === "loading"
+			? "loading traces..."
+			: ""
+	const leftLength = "MOTEL".length + SEPARATOR.length + serviceLabel.length + attrFilterLabel.length
+	const gap = Math.max(2, headerFooterWidth - leftLength - right.length)
+
+	return {
+		serviceLabel,
+		attrFilterLabel,
+		right,
+		gap,
+	} as const
+}
+
+const AppHeader = ({
+	serviceLabel,
+	attrFilterLabel,
+	gap,
+	right,
+}: {
+	readonly serviceLabel: string
+	readonly attrFilterLabel: string
+	readonly gap: number
+	readonly right: string
+}) => (
+	<box paddingLeft={1} paddingRight={1} flexDirection="column">
+		<TextLine>
+			<span fg={colors.muted} attributes={TextAttributes.BOLD}>MOTEL</span>
+			<span fg={colors.separator}>{SEPARATOR}</span>
+			<span fg={colors.muted}>{serviceLabel}</span>
+			{attrFilterLabel ? <span fg={colors.accent} attributes={TextAttributes.BOLD}>{attrFilterLabel}</span> : null}
+			<span fg={colors.muted}>{" ".repeat(gap)}</span>
+			<span fg={colors.muted} attributes={TextAttributes.BOLD}>{right}</span>
+		</TextLine>
+	</box>
+)
+
+const AppFooter = ({
+	showSplit,
+	footerHeight,
+	contentWidth,
+	leftPaneWidth,
+	rightPaneWidth,
+	footerNotice,
+	spanNavActive,
+	detailView,
+	autoRefresh,
+	headerFooterWidth,
+}: {
+	readonly showSplit: boolean
+	readonly footerHeight: number
+	readonly contentWidth: number
+	readonly leftPaneWidth: number
+	readonly rightPaneWidth: number
+	readonly footerNotice: string | null
+	readonly spanNavActive: boolean
+	readonly detailView: "waterfall" | "span-detail" | "service-logs"
+	readonly autoRefresh: boolean
+	readonly headerFooterWidth: number
+}) => {
+	if (footerHeight <= 0) return null
+
+	return (
+		<>
+			{showSplit
+				? <SplitDivider leftWidth={leftPaneWidth} junction={"┴"} rightWidth={rightPaneWidth} />
+				: <Divider width={contentWidth} />}
+			<box paddingLeft={1} paddingRight={1} flexDirection="column" height={footerHeight}>
+				{footerNotice ? (
+					<PlainLine text={footerNotice} fg={colors.count} />
+				) : (
+					<FooterHints spanNavActive={spanNavActive} detailView={detailView} autoRefresh={autoRefresh} width={headerFooterWidth} />
+				)}
+			</box>
+		</>
+	)
+}
+
+const AppOverlays = ({
+	width,
+	height,
+	showHelp,
+	autoRefresh,
+	selectedTheme,
+	setShowHelp,
+	pickerMode,
+	pickerInput,
+	pickerIndex,
+	activeAttrKey,
+	attrFacets,
+}: {
+	readonly width: number
+	readonly height: number
+	readonly showHelp: boolean
+	readonly autoRefresh: boolean
+	readonly selectedTheme: ThemeName
+	readonly setShowHelp: (value: boolean) => void
+	readonly pickerMode: "off" | "keys" | "values"
+	readonly pickerInput: string
+	readonly pickerIndex: number
+	readonly activeAttrKey: string | null
+	readonly attrFacets: AttrFacetState
+}) => (
+	<>
+		{showHelp ? <HelpModal width={width} height={height} autoRefresh={autoRefresh} themeLabel={themeLabel(selectedTheme)} onClose={() => setShowHelp(false)} /> : null}
+		{pickerMode !== "off" ? (
+			<AttrFilterModal
+				width={width}
+				height={height}
+				mode={pickerMode}
+				input={pickerInput}
+				selectedIndex={pickerIndex}
+				selectedKey={activeAttrKey}
+				state={attrFacets}
+				onClose={() => { /* handled via keyboard */ }}
+			/>
+		) : null}
+	</>
+)
 
 export const App = () => {
 	const { width, height } = useTerminalDimensions()
@@ -98,7 +246,7 @@ export const App = () => {
 		setNotice(message)
 		noticeTimeoutRef.current = globalThis.setTimeout(() => {
 			setNotice((current) => (current === message ? null : current))
-		}, 2500)
+		}, NOTICE_TIMEOUT_MS)
 	}
 
 	useEffect(() => () => {
@@ -123,30 +271,30 @@ export const App = () => {
 		flashNotice,
 	})
 
-	const headerServiceLabel = selectedTraceService ?? "none"
-	const autoLabel = autoRefresh ? "● live" : "○ paused"
-	const attrFilterLabel = activeAttrKey && activeAttrValue
-		? `  [${activeAttrKey}=${activeAttrValue.length > 20 ? `${activeAttrValue.slice(0, 19)}…` : activeAttrValue}]`
-		: ""
-	const headerRight = traceState.fetchedAt
-		? `${autoLabel}  ${formatTimestamp(traceState.fetchedAt)}`
-		: traceState.status === "loading"
-			? "loading traces..."
-			: ""
-	const headerLeftLen = "MOTEL".length + SEPARATOR.length + headerServiceLabel.length + attrFilterLabel.length
-	const headerGap = Math.max(2, headerFooterWidth - headerLeftLen - headerRight.length)
-	const visibleFooterNotice = footerNotice
+	const headerModel = buildHeaderModel({
+		headerFooterWidth,
+		selectedTraceService,
+		activeAttrKey,
+		activeAttrValue,
+		autoRefresh,
+		fetchedAt: traceState.fetchedAt,
+		status: traceState.status,
+	})
 
 	const selectTraceById = useCallback((traceId: string) => {
 		const index = traceState.data.findIndex((trace) => trace.traceId === traceId)
 		if (index >= 0) setSelectedTraceIndex(index)
 	}, [setSelectedTraceIndex, traceState.data])
 
+	const visibleSpans = useMemo(
+		() => selectedTrace ? getVisibleSpans(selectedTrace.spans, collapsedSpanIds) : [],
+		[selectedTrace, collapsedSpanIds],
+	)
+
 	const selectSpan = useCallback((index: number) => {
-		if (!selectedTrace) return
-		const visibleCount = getVisibleSpans(selectedTrace.spans, collapsedSpanIds).length
-		setSelectedSpanIndex(Math.max(0, Math.min(index, visibleCount - 1)))
-	}, [collapsedSpanIds, selectedTrace, setSelectedSpanIndex])
+		if (visibleSpans.length === 0) return
+		setSelectedSpanIndex(Math.max(0, Math.min(index, visibleSpans.length - 1)))
+	}, [setSelectedSpanIndex, visibleSpans])
 
 	const traceListProps = useMemo(() => ({
 		traces: filteredTraces,
@@ -163,8 +311,7 @@ export const App = () => {
 		onSelectTrace: selectTraceById,
 	} as const), [filteredTraces, selectedTraceSummary?.traceId, traceState.status, traceState.error, leftContentWidth, traceState.services, selectedTraceService, spanNavActive, filterText, traceSort, traceState.data.length, selectTraceById])
 
-	const filteredSpans = selectedTrace ? getVisibleSpans(selectedTrace.spans, collapsedSpanIds) : []
-	const selectedSpan = selectedSpanIndex !== null ? filteredSpans[selectedSpanIndex] ?? null : null
+	const selectedSpan = selectedSpanIndex !== null ? visibleSpans[selectedSpanIndex] ?? null : null
 	const selectedSpanLogs = useMemo(
 		() => selectedSpan ? logState.data.filter((log) => log.spanId === selectedSpan.spanId) : [],
 		[selectedSpan, logState.data],
@@ -180,16 +327,7 @@ export const App = () => {
 
 	return (
 		<box width={width ?? 100} height={height ?? 24} flexGrow={1} flexDirection="column" backgroundColor={RGBA.fromHex(colors.screenBg)}>
-			<box paddingLeft={1} paddingRight={1} flexDirection="column">
-				<TextLine>
-					<span fg={colors.muted} attributes={TextAttributes.BOLD}>MOTEL</span>
-					<span fg={colors.separator}>{SEPARATOR}</span>
-					<span fg={colors.muted}>{headerServiceLabel}</span>
-					{attrFilterLabel ? <span fg={colors.accent} attributes={TextAttributes.BOLD}>{attrFilterLabel}</span> : null}
-					<span fg={colors.muted}>{" ".repeat(headerGap)}</span>
-					<span fg={colors.muted} attributes={TextAttributes.BOLD}>{headerRight}</span>
-				</TextLine>
-			</box>
+			<AppHeader {...headerModel} />
 			{showSplit
 				? <SplitDivider leftWidth={leftPaneWidth} junction={"┬"} rightWidth={rightPaneWidth} />
 				: <Divider width={contentWidth} />}
@@ -221,33 +359,31 @@ export const App = () => {
 				expandedChatChunkIds={expandedChatChunkIds}
 				selectSpan={selectSpan}
 			/>
-			{footerHeight > 0 ? (
-				<>
-					{showSplit
-						? <SplitDivider leftWidth={leftPaneWidth} junction={"┴"} rightWidth={rightPaneWidth} />
-						: <Divider width={contentWidth} />}
-					<box paddingLeft={1} paddingRight={1} flexDirection="column" height={footerHeight}>
-						{visibleFooterNotice ? (
-							<PlainLine text={visibleFooterNotice} fg={colors.count} />
-						) : (
-							<FooterHints spanNavActive={spanNavActive} detailView={detailView} autoRefresh={autoRefresh} width={headerFooterWidth} />
-						)}
-					</box>
-				</>
-			) : null}
-			{showHelp ? <HelpModal width={width ?? 100} height={height ?? 24} autoRefresh={autoRefresh} themeLabel={themeLabel(selectedTheme)} onClose={() => setShowHelp(false)} /> : null}
-			{pickerMode !== "off" ? (
-				<AttrFilterModal
-					width={width ?? 100}
-					height={height ?? 24}
-					mode={pickerMode}
-					input={pickerInput}
-					selectedIndex={pickerIndex}
-					selectedKey={activeAttrKey}
-					state={attrFacets}
-					onClose={() => { /* handled via keyboard */ }}
-				/>
-			) : null}
+			<AppFooter
+				showSplit={showSplit}
+				footerHeight={footerHeight}
+				contentWidth={contentWidth}
+				leftPaneWidth={leftPaneWidth}
+				rightPaneWidth={rightPaneWidth}
+				footerNotice={footerNotice}
+				spanNavActive={spanNavActive}
+				detailView={detailView}
+				autoRefresh={autoRefresh}
+				headerFooterWidth={headerFooterWidth}
+			/>
+			<AppOverlays
+				width={width ?? 100}
+				height={height ?? 24}
+				showHelp={showHelp}
+				autoRefresh={autoRefresh}
+				selectedTheme={selectedTheme}
+				setShowHelp={setShowHelp}
+				pickerMode={pickerMode}
+				pickerInput={pickerInput}
+				pickerIndex={pickerIndex}
+				activeAttrKey={activeAttrKey}
+				attrFacets={attrFacets}
+			/>
 		</box>
 	)
 }
